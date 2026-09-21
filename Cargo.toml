@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/bencode", "crates/engine", "learn"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Security policy for EVERY crate (spec §5 "Crate policy").
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
