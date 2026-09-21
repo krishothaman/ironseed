@@ -75,3 +75,65 @@ surprises. It's also a supply-chain habit: know exactly what builds your code.
 
 It still shows the order things happen in BitTorrent. But it has bugs (listed in the
 spec, section 10), so it goes in `legacy-python/` as a reference, never as code we run.
+
+---
+
+## Task 2 — ex01 piece math (`learn/src/ex01_piece_math.rs`)
+
+**Torrent idea:** a torrent splits a file into equal **pieces** (for example 256 KiB each).
+The last piece is usually shorter. We need three answers: how many pieces, how
+long is the last one, and where does piece N start in the file.
+
+### Rust you learned
+
+```rust
+pub fn piece_count(total_len: u64, piece_len: u64) -> Option<u64> {
+```
+- `fn` makes a function. `pub` means other files may use it.
+- `total_len: u64` is an input named `total_len` of type `u64`: an **unsigned 64-bit number**,
+  meaning whole numbers from 0 up to about 18 quintillion. No negatives, no decimals.
+- `-> Option<u64>` is what it returns. **`Option` means "maybe a number":**
+  - `Some(4)` → "here's the answer: 4"
+  - `None` → "there is no sensible answer"
+
+  Rust has **no `null`**. If something might be missing, the type *says so*,
+  and the compiler forces the caller to handle the `None` case.
+- `if ... { return None; }` bails out early.
+- `match` is a smarter `if`: "look at this value, and pick the branch that fits":
+  ```rust
+  match total_len % piece_len {   // % = remainder after division
+      0   => Some(piece_len),     // divides evenly → last piece is full size
+      rem => Some(rem),           // otherwise → last piece = the remainder
+  }
+  ```
+- The last line without a `;` is the return value. `Some(...)` at the end = return it.
+
+### TDD (test-driven development)
+
+1. Write tests first (`#[test] fn ...`), using `assert_eq!(actual, expected)`.
+2. Run them → **watch them fail** (we used `todo!()`, which means "not written yet").
+3. Write the real code.
+4. Run them → **watch them pass**.
+
+Seeing a test fail first proves it really tests something. A test that can
+never fail protects nothing.
+
+### Security lesson — attackers control the numbers (threat T14)
+
+A `.torrent` file is written by a stranger. It can claim **any** numbers:
+
+| Attack | What happens in naive code | Our defence |
+|---|---|---|
+| `piece length = 0` | division by zero → **crash** | `if piece_len == 0 { return None }` |
+| `piece index` huge | `index × piece_len` gets bigger than a `u64` can hold → **overflow** | `checked_mul` returns `None` instead |
+
+**Overflow** is like a car odometer rolling past 999999 back to 000000. In Rust:
+- in a *debug* build, overflow **crashes** (a denial of service),
+- in a *release* build, it silently **wraps around** to a small wrong number. Our code
+  would then write data to the **wrong place in the file**.
+
+The old Python code did `index * piece_length` with no check at all.
+`checked_mul` means: "multiply, but if it overflows, tell me with `None`".
+
+Test names starting with `t14_` link each test to threat T14 in the spec, so we can
+prove every threat has a test.
