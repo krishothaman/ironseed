@@ -1,195 +1,341 @@
-# Secure BitTorrent Client — Design Spec
+# Secure BitTorrent Client — Design Spec (rev. 2)
 
-> **Status:** Awaiting user review. All brainstorming questions are answered (2026-09-21).
-> No code is written until this spec is approved. After approval, it is turned into a task-by-task implementation plan.
+> **Status:** APPROVED by user, 2026-09-21.
+> **Rev. 2** merges an external security review (Manus) with the author's own additions. Section 9 records what was taken from each source.
+> **Product claim:** *"A security-conscious, experimental, Windows-first BitTorrent client for authorized content, with bounded parsing, sandboxed storage, signed releases, and explicitly documented privacy limitations."*
+> It is **not** anonymous, **not** VPN-equivalent and **not** production-hardened until it has had independent review.
 
 ---
 
 ## 1. Goal
 
-Build a **security-first BitTorrent desktop client** in **Rust + Tauri**. It downloads and seeds files from `.torrent` files, and later from magnet links. It will be installable from a download website.
+A BitTorrent desktop client in **Rust + Tauri 2**, Windows first. It downloads and seeds from `.torrent` files; later milestones add magnet links and DHT. It will be installable from a download website.
 
-The project is also a **learning vehicle**. The user is a complete Rust beginner, and every phase is taught as **concept → threat → design → build → test**.
+It is also a **Rust-learning project**. The user is a complete beginner, so every phase follows **concept → threat → smallest safe design → build → test → security review**, explained in plain language.
 
-**Legality.** The BitTorrent protocol is legal, and so are clients like qBittorrent and uTorrent. Only piracy is illegal. All testing uses legal content: our own test files, Ubuntu/Debian ISOs, or public-domain works from the Internet Archive.
+**Legality.** The BitTorrent protocol and client software are lawful in many jurisdictions. Whether specific content may be copied depends on its copyright status. Testing uses only self-created files, official Linux images, and public-domain or otherwise authorized content. (This is not legal advice.)
 
 ---
 
 ## 2. Decisions
 
-| # | Question | Decision |
+| # | Topic | Decision |
 |---|---|---|
-| 1 | App architecture | **Tauri 2.** Rust engine, web UI in the OS webview, **no network port opened for the UI** |
-| 1b | Rust experience | **Complete beginner.** Crash course in Phase 0. Early phases are synchronous. Compiler errors are taught, not hidden. |
-| 2 | Scope | **v1: `.torrent` only.** **v2: magnet links + DHT, a firm requirement.** v1 must be designed so v2 doesn't need a rewrite. |
-| 3 | Seeding | **Download + upload**, with upload rate limits and strict request validation |
-| 4 | Privacy | **All four:** SOCKS5 proxy, network kill switch (interface binding), protocol encryption (MSE/PE), IP blocklist |
-| 5 | Target OS | **Windows first.** Tauri keeps macOS and Linux possible later. |
-| 6 | Testing | **Unit + fuzzing + local test swarm** |
+| 1 | Architecture | **Tauri 2.** Rust engine plus a TypeScript UI in WebView2. **No network port opened for the UI.** |
+| 2 | Rust experience | Complete beginner. Crash course first, early phases synchronous, compiler errors taught. |
+| 3 | Scope | **Milestone 1: `.torrent` only.** **Milestone 2: magnet links + DHT (required).** BitTorrent v2 (BEP-52) is a *separate, later* project. |
+| 4 | Seeding | Download + upload, with limits and strict request validation |
+| 5 | Privacy | SOCKS5 proxy, kill switch (interface binding), MSE/PE obfuscation, IP blocklist. Every one fails closed and shows a visible status. |
+| 6 | Target OS | Windows first |
+| 7 | Testing | Unit, property, fuzzing, local hostile swarm, and Windows-specific tests |
+| 8 | Rigor | Controls are **tiered** (§6): *Required* before any public build, *Stretch* afterwards |
 
 ---
 
-## 3. Architecture
+## 3. Scope and terminology
+
+**Milestone 1 (M1)** includes:
+- `.torrent` import and BitTorrent v1 metainfo with SHA-1 piece verification
+- HTTP and UDP trackers over TCP peer connections
+- Downloading and seeding
+- The Tauri UI with an IPC allowlist
+- Windows packaging with signed updates
+
+**M1 excludes:** magnet links, metadata exchange, DHT, uTP, streaming, RSS, remote administration, search, and torrent authoring (except as a test-only tool).
+
+**Rule:** M1 never *advertises* features it doesn't implement. For example, the BEP-10 extension bit is **not** set in M1, though the parser tolerates message ID 20 and ignores it safely.
+
+| Later milestone | Content |
+|---|---|
+| **M2-a** Extension protocol | BEP-10 negotiation, BEP-9 metadata exchange |
+| **M2-b** Magnet support | Strict magnet URI parsing, then metadata acquisition through M2-a |
+| **M2-c** Mainline DHT | BEP-5 peer discovery over UDP |
+| **M3** BitTorrent v2 / hybrid | BEP-52 metadata and piece layers. Specified separately, later. |
+
+**Designed for M2 now:** torrents are keyed by `InfoHash`, never by file path. `metainfo` is `Option<Metainfo>`, so it can arrive later. Peer discovery goes through a `PeerSource` trait.
+
+---
+
+## 4. Architecture
 
 ```
 ┌──────────────────────── one desktop process ────────────────────────┐
-│                                                                      │
-│  UI (TypeScript, OS webview)        Rust side                        │
+│  UI (TypeScript, WebView2)          Rust                             │
 │  ┌──────────────────┐   Tauri IPC   ┌──────────────────────────────┐ │
-│  │ torrent list      │ ───────────► │ src-tauri: command layer      │ │
-│  │ add / pause / rm  │  allowlisted │  - validates every argument   │ │
-│  │ speeds, settings  │ ◄─────────── │  - no fs/shell plugins to UI  │ │
-│  └──────────────────┘   events      └──────────────┬───────────────┘ │
-│   CSP: no remote scripts,                          │                  │
-│   no eval, no inline JS                            ▼                  │
+│  │ torrent list,     │ ───────────► │ src-tauri: command layer      │ │
+│  │ add/pause/remove, │  allowlisted │ = SECURITY BOUNDARY           │ │
+│  │ speeds, settings  │ ◄─────────── │ typed args, validated,        │ │
+│  └──────────────────┘   events      │ errors never leak paths       │ │
+│  CSP: no remote/inline script,      └──────────────┬───────────────┘ │
+│  no eval; text nodes only                          ▼                  │
 │                                     ┌──────────────────────────────┐ │
-│                                     │ engine crate (tokio)          │ │
-│                                     │  session ─ torrents by hash   │ │
-│                                     │  peer sources: tracker (v1),  │ │
-│                                     │               DHT (v2)        │ │
-│                                     │  peer conns ─ wire protocol   │ │
-│                                     │  piece picker ─ storage       │ │
-│                                     │  net layer: proxy / bind /    │ │
-│                                     │   blocklist / encryption      │ │
+│                                     │ engine (tokio)                │ │
+│                                     │ session · metainfo · storage  │ │
+│                                     │ tracker · peer · picker       │ │
+│                                     │ choker · ratelimit · net      │ │
 │                                     └──────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────────┘
-          ▲ network: trackers + peers (all untrusted)
+               ▲ trackers + peers: ALL UNTRUSTED
 ```
 
-### 3.1 Repository layout (Cargo workspace)
+### 4.1 Workspace
 
 ```
 bittorrent-client/
 ├─ crates/
-│  ├─ bencode/        # hardened bencode parser/encoder (no deps, fuzzed)
-│  ├─ engine/         # all torrent logic, no UI knowledge
-│  └─ test-swarm/     # tiny HTTP tracker + harness for end-to-end tests
-├─ src-tauri/         # Tauri app: IPC commands, capabilities, bundling
-├─ ui/                # TypeScript frontend (Vite, vanilla TS to start)
-├─ fuzz/              # cargo-fuzz targets
-├─ legacy-python/     # the original Python client, kept as reference only
-└─ docs/
+│  ├─ bencode/       # bounded parser/encoder; no dependencies; fuzzed
+│  ├─ engine/        # all torrent logic; knows nothing about the UI
+│  └─ test-swarm/    # local tracker, seeders, hostile peers (tests only)
+├─ src-tauri/        # IPC commands, capabilities, bundling, updater
+├─ ui/               # TypeScript (Vite, vanilla TS)
+├─ fuzz/             # cargo-fuzz targets and corpora
+├─ learn/            # Phase 0 Rust exercises (not shipped)
+├─ legacy-python/    # original client: reference only, never built or shipped
+└─ docs/             # specs, plans, threat model, limitations
 ```
 
-**Why separate crates:** the `bencode` and `engine` crates don't depend on Tauri. They can be tested and fuzzed alone, and the UI can't reach engine internals except through the command layer.
-
-### 3.2 Engine modules
+### 4.2 Engine modules
 
 | Module | Responsibility |
 |---|---|
-| `metainfo` | Turns decoded bencode into a validated `Metainfo`. Computes `info_hash`. Holds the file list. |
-| `storage` | Maps pieces to files and offsets, runs the **path sandbox**, handles preallocation, reads for seeding, writes for downloading |
-| `tracker` | HTTP (BEP-3) and UDP (BEP-15) announces; implements `PeerSource` |
-| `peer` | Handshake, message framing and parsing, per-connection state machine, timeouts |
-| `picker` | Rarest-first piece selection, request pipelining, endgame mode |
-| `choker` | Tit-for-tat unchoking, optimistic unchoke, upload slots |
-| `net` | Socket creation: interface binding (kill switch), SOCKS5, blocklist check, MSE/PE |
-| `ratelimit` | Token-bucket limits for upload and download, global and per peer |
-| `session` | Owns all torrents (keyed by `InfoHash`), config, and resume data. Sends events to the UI. |
-
-### 3.3 Designed for v2 (magnet + DHT)
-
-- Torrents are keyed by **`InfoHash`**, never by file path.
-- `Torrent.metainfo: Option<Metainfo>`. It is `None` until metadata arrives, which in v2 comes over BEP-9.
-- Peer discovery goes through a **`PeerSource` trait**. `TrackerSource` is the v1 implementation; `DhtSource` is added in v2.
-- The handshake reserves and sets the **extension-protocol bit (BEP-10)**, and the message parser tolerates extension messages from v1 onwards.
+| `metainfo` | Bencode → validated `Metainfo`. `info_hash` = SHA-1 of the **raw info-dict bytes**. Sanity limits. |
+| `storage` | Handle-relative, reparse-point-safe file creation. Piece↔file mapping, atomic writes, quotas, free-space checks, resume state, Mark-of-the-Web. |
+| `tracker` | HTTP and UDP (BEP-15) clients with response correlation, address policy and limits. Implements `PeerSource`. |
+| `peer` | Handshake, framing, state machine, deadlines, request validation |
+| `picker` | Rarest-first, pipelining, endgame, completion |
+| `choker` / `ratelimit` | Tit-for-tat, optimistic unchoke, token buckets |
+| `net` | The **only** place sockets are created. Proxy, DNS policy, IPv4/IPv6 policy, interface binding, blocklist, MSE/PE. |
+| `session` | Torrent lifecycle, config, persistence, shutdown, UI events |
+| `redact` | Log redaction helpers, used by all logging |
 
 ---
 
-## 4. Threat model
+## 5. Threat model
 
-**Core rule:** every byte from the network, from a `.torrent` file, or from the UI is **untrusted until validated**.
+**Rule:** every network byte, local file, file name, config value, update artifact and UI argument is untrusted.
 
-**What Rust gives us for free:** no buffer overflows, use-after-free or data races in safe code.
-**What it does not:** logic bugs, unbounded allocation, panics (a crash is still a DoS), and path traversal.
-**Policy:**
-- `#![forbid(unsafe_code)]` in `bencode` and `engine`.
-- No `unwrap()`/`expect()` on untrusted data. clippy enforces this.
-- Every size read from input is checked against a cap *before* allocating.
+**What Rust gives us:** memory safety in safe code.
+**What it doesn't:** protection from DoS, logic bugs, path races, privacy leaks, unsafe updates, or broken authorization.
 
-| ID | Threat | Source | Impact | Mitigation |
-|---|---|---|---|---|
-| T1 | Malicious bencode: deep nesting, huge length prefixes, non-canonical ints | `.torrent`, tracker | Crash or memory exhaustion | Parser with a **max depth** (e.g. 64), **max input size** (e.g. 10 MB for `.torrent`), string length checked against the remaining input, strict integer grammar (no `i-0e`, no leading zeros), trailing data rejected, dict keys required to be sorted |
-| T2 | **Path traversal** in multi-file torrents (`..`, absolute paths, `C:\`, `\\?\`, UNC, `CON`/`NUL`/`AUX`, trailing dots or spaces, ADS `file:stream`) | `.torrent` | **Arbitrary file write**, e.g. into Startup | Each path component validated against a strict allowlist. The final path is **resolved and confirmed to be inside the download directory**. Symlinks, junctions and reparse points are refused. Files are created with no-follow semantics. |
-| T3 | Oversized or malformed peer messages | Peer | Memory exhaustion, crash | Length prefix capped (e.g. 16 KiB block + header, bitfield ≤ `ceil(pieces/8)`). Exact size checked per message type. Per-connection buffer cap. |
-| T4 | Piece poisoning | Peer | Corrupt data, wasted bandwidth | SHA-1 verification before any piece is marked complete. Each piece records its contributors, and a peer is banned after repeated hash failures. |
-| T5 | Resource exhaustion: connection floods, slowloris peers, request spam | Peers | Engine stalls | Global and per-torrent connection caps, handshake timeout, idle timeout, per-peer request queue cap, half-open connection limit |
-| T6 | Reflection and amplification via UDP tracker (v2: DHT) | Third party | Our client attacks someone else | UDP tracker connection-ID handshake (BEP-15), outgoing rate limits, never sending a large reply to an unverified source |
-| T7 | Hostile tracker responses: huge peer lists, private or loopback IPs, redirect chains | Tracker | Memory use, **SSRF-style scanning of the LAN** | Response size cap, peer-count cap, loopback/private/multicast peers dropped by default, redirects limited, HTTPS preferred |
-| T8 | IP exposure to the swarm and ISP | Swarm, ISP | Privacy loss | SOCKS5 proxy, kill switch (bind to one interface, stop all traffic if it goes down), MSE/PE encryption, clear in-UI explanation of what each does and **does not** protect |
-| T9 | UI compromise: XSS through torrent names, or malicious IPC calls | `.torrent` contents, UI | Engine controlled by an attacker | Tauri **capabilities allowlist** (only our commands), strict **CSP**, no `innerHTML` with torrent data (text nodes only), every IPC argument validated in Rust, no fs/shell/http plugins exposed |
-| T10 | Tampered installer or update | MITM, compromised host | Malware on the user's PC | Tauri updater with **signed manifests**, code-signed installer, SHA-256 checksums on the website, HTTPS only |
-| T11 | **Seeding abuse:** requests for pieces we don't have, out-of-range offsets, oversized block lengths, request floods | Peer | Crash, info leak, bandwidth drain | Each request checked: piece index < count, we have the piece, `offset + len ≤ piece_len`, `len ≤ 16 KiB`, peer is unchoked. Per-peer request queue cap and upload rate limit. Reads only through the sandboxed `storage` API. |
-| T12 | Blocklist or config file tampering | Local file, downloaded list | Parser crash, disabled protections | Blocklist parser with size and line caps. Config validated on load. Unsafe values are rejected with a fallback to defaults. |
+**Crate policy:**
+- `#![forbid(unsafe_code)]` in `bencode` and `engine`. Any Windows API needed goes through a reviewed crate such as `cap-std` or `windows`, never ad-hoc `unsafe`.
+- No `unwrap()` or `expect()` on fallible paths, enforced by clippy.
+- Every length is checked against a cap *before* allocating.
 
-**MSE/PE note:** it uses RC4 and a 768-bit Diffie-Hellman key exchange. This is **obfuscation against ISP traffic shaping, not real security**. The UI and docs will say so plainly; overselling it would be a security bug in itself.
+### T1 — Malicious bencode
+**Controls:**
+- Caps on input size (`.torrent` ≤ 10 MiB), nesting depth (≤ 64), item count per list or dict, string length (≤ remaining input), and integer digits (≤ 20).
+- Strict integer grammar: no `-0`, no leading zeros, no empty integer.
+- **Duplicate keys are rejected.**
+- **Unsorted keys are tolerated**, because many real torrents have them, and a flag records that the input was non-canonical.
+- Trailing bytes after the top-level value are rejected.
+- The parser records the **byte span** of every value, so `info_hash` can be computed over the original bytes.
+
+### T2 — Path traversal and Windows filesystem races
+- **Component allowlist** rejects: `..` and `.`, empty components, absolute and drive-qualified paths, UNC and `\\?\` device paths, `:` (alternate data streams), reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`, including with extensions), trailing dots or spaces, control characters, `<>:"/\|?*`, and invalid UTF-8.
+- **Case-insensitive collision detection** across the torrent's own files (`a.txt` vs `A.TXT`).
+- **Race resistance:** the download root is opened once as a directory handle, and every directory and file is created **relative to that handle** with `cap-std`. Reparse points (junctions, symlinks) are refused at every component. **We never do string-resolve-then-check.**
+- **Tests:** a junction is swapped in mid-creation, a pre-planted junction exists, and the path is long (> 260 characters).
+- The download directory is user-chosen. System, Program Files, Windows and Startup directories are refused.
+- **Overwrite policy:** existing files are never overwritten unless the user explicitly resumes into them.
+
+### T3 — Malformed peer messages
+**Controls:**
+- The frame length is capped *before* allocating: ≤ 16 KiB + 13 for `piece` messages; bitfield ≤ ⌈pieces/8⌉.
+- Each message type must have its exact size.
+- Per-connection buffer cap.
+- Deadlines for the handshake, idle time and total connection time.
+
+### T4 — Piece poisoning
+**Controls:**
+- SHA-1 verification before a piece is marked complete.
+- Each piece records who contributed to it.
+- **Cautious reputation:** a peer is banned only after repeated failures, never after one, and the threshold is configurable. A failed piece is optionally re-fetched from a single peer to attribute blame.
+- Tested with a mix of honest and corrupting peers.
+
+### T5 — Resource exhaustion
+**Controls:**
+- Global and per-torrent caps on connections, half-open connections, outstanding requests, tracker response size, disk queue, and UI event rate.
+- A slowloris defence through deadlines.
+
+### T6 — Reflection and amplification
+**Controls:**
+- UDP tracker: validate packet length, `action` and `transaction_id`; use only a live connection ID (≤ 60 s); never assume a fixed packet size.
+- Rate-limit all outgoing UDP traffic.
+
+### T7 — Hostile trackers, and SSRF through announce URLs
+**Controls:**
+- **Address policy** applies to both tracker-supplied peers **and to announce URLs from the torrent**. Loopback, private (RFC 1918), link-local, CGNAT, multicast and unspecified addresses are blocked by default; LAN addresses are an explicit opt-in.
+- DNS results are re-checked, so a public hostname that resolves to a LAN address is also blocked.
+- Only the `http`, `https` and `udp` schemes are allowed.
+- Response byte cap, peer-count cap, and ≤ 2 redirects, each redirect re-checked against the address policy.
+
+### T8 — Privacy and network failure (exposure reduction, **not** anonymity)
+- **SOCKS5 with a DNS policy:** remote DNS through the proxy when the proxy is on (`socks5h` semantics). No local lookups of tracker or peer hostnames.
+- **UDP under a proxy:** most SOCKS5 proxies don't support UDP, so **UDP trackers (and, in M2, DHT) are disabled while a proxy is active**, unless UDP ASSOCIATE is verified. The UI explains the cost: no UDP trackers and weaker seeding, since a proxy can't accept incoming connections.
+- **IPv6:** disabled whenever the proxy or kill-switch path can't cover it.
+- **Interface binding** applies to *every* socket (tracker, peer, DNS, and DHT in M2), because all sockets are created in `net`. **If binding fails, the network stops; there is no silent fallback.**
+- **Kill-switch state machine:** states `Off / Armed / Tripped`. Tested for interface loss, proxy failure and partial socket creation. A manual checklist covers sleep/wake and restart (automated later, as a stretch goal).
+- **MSE/PE** is described in the UI as "traffic obfuscation (RC4, weak), not encryption for privacy".
+- **Blocklist:** limits on size, lines and ranges. A failed update keeps the old list and **reports the failure**.
+- **Log redaction:** by default, no peer IPs, torrent names, proxy credentials, or tracker URLs with passkeys. Diagnostic logging is an explicit opt-in. A redaction unit test covers this.
+- **UI limitations panel:** what each control does and does not protect.
+
+### T9 — UI / IPC compromise
+**Controls:**
+- A capabilities allowlist is committed to git, and **a test checks that commands outside it fail**.
+- The Tauri **isolation pattern**.
+- Strict CSP: no remote scripts, no inline scripts, no `eval`.
+- **Text nodes only** for torrent names and tracker messages; never `innerHTML`.
+- No fs, shell, http or process plugins exposed to the webview.
+- Devtools disabled in release builds, and no remote-domain IPC.
+- Command errors are structured and never contain full paths.
+
+### T10 — Tampered installer or update
+**Controls:**
+- HTTPS only.
+- The Tauri updater verifies **signed manifests and artifacts**.
+- **Anti-rollback:** older versions are rejected.
+- SHA-256 checksums on the website.
+- The updater's signing key is kept out of git and separate from CI build credentials.
+- **Tests:** corrupt signature, wrong public key, altered manifest, altered artifact, downgrade, and unreachable server.
+- *Stretch:* Authenticode code signing (it costs money and mainly affects SmartScreen), reproducible builds, provenance, and a revocation and key-rotation plan.
+
+### T11 — Seeding abuse
+Every request is checked:
+- the piece index is below the piece count,
+- we have the piece and it's verified,
+- `offset + len ≤ piece_len`,
+- `0 < len ≤ 16 KiB`,
+- the peer is unchoked and interested,
+- the queue is under its cap,
+- duplicate requests are dropped,
+- the global and per-peer rate limits allow it.
+
+Reads happen **only** through the `storage` API.
+
+### T12 — Local attacker and config tampering
+**Controls:**
+- Config and resume files are validated on load, and unsafe security settings **fail closed**.
+- Atomic replace (write a temp file, then rename).
+- Files live in a per-user app-data directory.
+- Secrets (proxy password) go in the Windows Credential Manager (`keyring` crate), not plain config.
+
+### T13 — Downloaded-content execution
+**Controls:**
+- Downloaded files are **inert**: never auto-opened, never previewed.
+- **Mark-of-the-Web** (`Zone.Identifier`, the hidden tag Windows attaches to downloaded files) is written on completed files, so Windows SmartScreen warns before running one.
+- The UI warns that executables and scripts in a download are untrusted.
+
+### T14 — Metainfo sanity (small file, huge claims)
+**Controls:**
+- Piece length is a power of two between 16 KiB and 64 MiB.
+- `pieces.len() % 20 == 0`.
+- The piece count must equal ⌈total/piece_len⌉.
+- File count ≤ 100,000, total size ≤ 1 PiB, path depth ≤ 32, name length ≤ 255.
+
+### T15 — External launch inputs
+**Controls:**
+- `.torrent` file association (and, in M2, `magnet:` links) is a **new untrusted input channel**, since a website can trigger it.
+- **Adding a torrent always requires user confirmation in the UI.** Nothing auto-starts from an external launch.
+
+### T16 — Supply chain
+**Controls:**
+- `Cargo.lock` and `package-lock.json` are committed.
+- `cargo audit`, `cargo deny` (advisories, licenses, sources) and `npm audit` run in CI.
+- Secret scanning (gitleaks).
+- The number of dependencies is kept minimal and new ones get reviewed.
+- CI uses least-privilege tokens.
 
 ---
 
-## 5. Testing strategy
+## 6. Tiering
 
-| Layer | Tool | What it covers |
+| Tier | Meaning | Includes |
 |---|---|---|
-| Unit tests | `cargo test` | Every module, including a test for every threat mitigation (e.g. "rejects `..` path", "rejects depth 65") |
-| Property tests | `proptest` | Encode→decode round-trips, piece/offset math, path validator invariants |
-| Fuzzing | `cargo-fuzz` (libFuzzer) | Bencode parser, metainfo builder, peer message parser, tracker response parser, blocklist parser. Runs in **WSL or GitHub Actions (Linux)**, because fuzzing support on Windows is limited. |
-| Malicious fixtures | Hand-crafted `.torrent` files | A "museum" of known attacks: path traversal, nesting bombs, huge lengths |
-| Local swarm (E2E) | `crates/test-swarm` | Our own minimal HTTP tracker plus instances of our client. Seed a generated file from one instance, download it with another, verify hashes. Also a hostile-peer mode that sends malformed messages. |
-| Static checks | `clippy` (pedantic subset), `cargo audit`, `cargo deny` | Lints, known-vulnerable dependencies, license policy |
-| CI | GitHub Actions | Runs everything on each push (Windows build + Linux fuzz smoke test) |
+| **Required** | Must pass before *any* public build | All of T1–T16 except the items marked *stretch* |
+| **Stretch** | After the first public build | Authenticode, reproducible builds, provenance, key revocation and rotation, automated sleep/wake tests, interop with a second established client |
 
 ---
 
-## 6. Roadmap
+## 7. Testing and acceptance gates
 
-Each phase ends with passing tests and a commit. The Rust concepts column is the teaching plan.
+**Tests:**
+- **Unit** tests for every module. Every control in §5 gets at least one test that names its threat ID, e.g. `t2_rejects_reserved_name`.
+- **Property** tests (`proptest`): round-trips, piece math, path invariants, request bounds.
+- **Fuzzing** (`cargo-fuzz`, run in WSL or Linux CI): bencode, metainfo, peer messages, tracker responses, blocklist and config (magnet in M2). Corpus, duration and crash triage are recorded.
+- **Local swarm:** honest, malformed, slow, corrupting and flooding peers; tracker failure; disk full.
+- **Windows-specific:** junction races, reserved names, case collisions, long paths, proxy failure, interface loss, installer and updater tests.
+- **Static checks:** `clippy -D warnings`, `cargo audit`, `cargo deny`, gitleaks.
+- **Interop:** against at least one established client (qBittorrent) using legal torrents. A second client is a stretch goal.
 
-### v1
+**Phase gate:** each phase must compile, pass its tests, get a threat review, get a commit, and get a plain-language explanation for the user.
 
-| Phase | Build | Rust concepts taught | Threats addressed |
+**Public-release gate:**
+- No open high-severity findings.
+- No unresolved fuzz crashes.
+- Hostile-peer, path-race, proxy and kill-switch failure tests all pass.
+- Update artifacts are signed.
+- `docs/LIMITATIONS.md` is published.
+
+---
+
+## 8. Roadmap
+
+| Phase | Build | Rust concepts taught | Threats |
 |---|---|---|---|
-| **0a** | Rust crash course: standalone exercises, no torrent code | cargo, variables, types, functions, `match`, `struct`, `enum`, ownership intro | Why memory safety matters |
-| **0b** | Project setup: git, workspace, Tauri scaffold, clippy, CI, move Python to `legacy-python/` | crates, modules, `Cargo.toml`, tests | Dependency pinning, `cargo audit`/`deny` |
-| **1** | `bencode` crate | **ownership and borrowing**, `&[u8]` slices, `Result` and `?`, recursive enums, error types | **T1** + first fuzz target |
-| **2** | `metainfo` + `storage` path sandbox (single- and multi-file) | `Path`/`PathBuf`, `impl` blocks, newtypes (`InfoHash`), validation | **T2**, T9 (safe names) |
-| **3** | Tracker client (HTTP, then UDP) | **async/await, tokio**, `reqwest`, `UdpSocket`, `PeerSource` trait | T6, T7 |
-| **4** | Peer wire protocol (handshake, messages, connection state machine) | traits, byte encoding and decoding, `tokio::spawn`, timeouts, `select!` | **T3**, T5 |
-| **5** | Piece picker, pipelining, storage writes, resume data | **`Arc`, `Mutex`, channels (`mpsc`)**, shared state | T4 |
-| **6** | Seeding: choker, upload handling, rate limiting | token buckets, fairness scheduling | **T11**, T5 |
-| **7** | `test-swarm` crate + end-to-end tests + hostile-peer tests | integration tests, test harnesses | Validates T3–T5, T11 |
-| **8** | Tauri UI + IPC commands + events | Tauri commands, `serde`, TypeScript basics | **T9** |
-| **9** | Privacy: interface binding (kill switch), SOCKS5, IP blocklist, MSE/PE | lower-level sockets, the `socket2` crate, DH + RC4 streams | **T8**, T12 |
-| **10** | Packaging: Tauri bundler (MSI/NSIS), code signing, signed updater | build configs, release profiles | **T10** |
-| **11** | Distribution website: download page, checksums, release notes | — | T10 |
-
-### v2 (required)
-
-| Phase | Build | Threats |
-|---|---|---|
-| **v2-a** | Extension protocol (BEP-10) + metadata exchange (BEP-9) | Metadata size caps. Metadata must SHA-1-match the `info_hash`. |
-| **v2-b** | Magnet URI parsing | Strict URI parsing, hex and base32 hash validation, tracker URL validation |
-| **v2-c** | DHT (BEP-5, Kademlia) as a `DhtSource` | T6 reflection, Sybil / eclipse resistance, routing-table limits, token validation, rate limits |
+| **0a** | Rust crash course (`learn/`) | cargo, types, functions, `match`, structs, enums, ownership | — |
+| **0b** | Foundation: git, workspace, CI, lint policy, error model, logging/redaction, `THREAT_MODEL.md`, legacy code moved | crates, modules, tests, `Cargo.toml` | T16 |
+| **1** | Bounded bencode | ownership and borrowing, slices, `Result`/`?`, enums, error types | T1 |
+| **2** | Metainfo + storage | `Path`, newtypes, `impl`, traits, `cap-std` | T2, T13, T14 |
+| **3** | Trackers (HTTP → UDP) | async/await, tokio, `PeerSource` trait | T6, T7 |
+| **4** | Peer protocol | byte encoding, `tokio::spawn`, `select!`, timeouts | T3, T5 |
+| **5** | Pieces, seeding, choker, rate limits | `Arc`, `Mutex`, channels | T4, T11 |
+| **6** | Local swarm + E2E tests | integration tests | T3–T5, T11 |
+| **7** | Tauri UI + IPC | Tauri commands, `serde`, TypeScript | T9, T12, T15 |
+| **8** | Network controls | `socket2`, state machines | T8 |
+| **9** | Release security | release profiles, updater | T10 |
+| **10** | Distribution website | — | T10 |
+| **M2-a/b/c** | Extension protocol, magnet, DHT | — | + metadata caps, BEP-5 tokens, Sybil limits |
+| **M3** | BitTorrent v2 / hybrid | — | specified separately |
 
 ---
 
-## 7. Out of scope (for now)
+## 9. Provenance of rev. 2 changes
 
-- macOS and Linux builds (possible later with Tauri)
-- Streaming playback, RSS feeds, a torrent search engine, a web UI for remote access
-- uTP (BEP-29) transport; TCP only in v1
-- Torrent creation (`.torrent` file authoring), unless it's needed for the test swarm, where it's a test-only tool
+- **From the external review (Manus):**
+  - milestone renaming, and separating out BitTorrent v2
+  - race-resistant Windows storage
+  - DNS and IPv6 leak policy, and kill-switch semantics
+  - log redaction
+  - inert downloads
+  - anti-rollback and updater failure tests
+  - supply-chain controls, local-attacker threats, and disk-exhaustion controls
+  - acceptance gates
+  - not advertising unimplemented extensions
+  - narrowed legality and product claims
+- **From the author:**
+  - raw-bytes `info_hash` (tolerate unsorted keys, don't reject them)
+  - SSRF through announce URLs and DNS re-checks
+  - Mark-of-the-Web
+  - UDP-under-SOCKS5 limitation
+  - external-launch confirmation (T15)
+  - metainfo sanity limits (T14)
+  - Tauri isolation pattern and disabled devtools
+  - Credential Manager for secrets
+  - tiering (Authenticode and similar items as stretch goals)
+- **Declined:** strict rejection of unsorted keys, because it breaks real torrents.
 
 ---
 
-## 8. Legacy Python code
+## 10. Legacy Python — known bugs not to repeat
 
-The existing Python client (`bencoding.py`, `torrent.py`, `tracker.py`, `pieces.py`, `protocol.py`, `client.py`) moves to `legacy-python/`. It serves as a **reading reference** for the protocol flow. Its known bugs are recorded here so they aren't repeated in the port:
-
-- Unbounded recursive bencode decoder (T1)
+- Unbounded recursive decoder
+- `info_hash` computed by **re-encoding** (wrong for non-canonical torrents)
 - Single-file torrents only
-- `event=started` is never sent
-- A list is modified while it's being iterated in `next_request`
-- A bare `except Exception: pass` hides errors
-- No message length cap (T3)
-- One request at a time (no pipelining)
+- `event=started` never sent
+- A list is modified while it's being iterated
+- A bare `except: pass`
+- No frame cap
+- No pipelining
 - No seeding
