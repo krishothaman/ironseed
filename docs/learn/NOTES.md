@@ -304,3 +304,55 @@ checked it. We lowercase every name into a `HashSet`; a repeat = collision = rej
 (Note: real Windows case rules are a bit different from Rust's `to_lowercase` for some
 non-English letters. The real engine will handle that properly in Phase 4; this is
 the idea.)
+
+---
+
+## Task 6 — ex05 results and errors (`learn/src/ex05_results.rs`)
+
+**Torrent idea:** a **tracker** is a server that tells you "here are some peers".
+Each peer is an address: an **IP** (which computer) plus a **port** (which door
+on that computer), like `10.0.0.5:6881`. Trackers usually send them packed as
+**6 bytes each** (BEP-23): 4 bytes of IP + 2 bytes of port.
+
+### Rust you learned
+
+- **`Result<T, E>`**: like `Option`, but the failure says **why**:
+  - `Ok(6881)` → success, here's the value
+  - `Err(PeerAddrError::PortZero)` → failed, and this is the reason
+- **Our own error enum** `PeerAddrError { MissingColon, BadIp, BadPort, ... }`:
+  every way parsing can fail has a name. The caller can `match` on it.
+- **`?` (the question mark)**: "if this is an `Err`, **return it right now**;
+  otherwise unwrap the `Ok` and keep going". It turns this:
+  ```rust
+  let port = match parse_port(p) { Ok(v) => v, Err(e) => return Err(e) };
+  ```
+  into `let port = parse_port(p)?;`. Errors "bubble up" to the caller. **No crash, no exceptions.**
+- **`.map_err(|_| PeerAddrError::BadPort)`**: swap the library's error for ours.
+- **`.ok_or(PeerAddrError::MissingColon)`**: turn an `Option` into a `Result`
+  (`None` → that error).
+- **`s.parse()`**: turn text into a number / IP. Rust figures out *which* type from
+  the annotation (`let port: u16 = ...`).
+- **`rsplit_once(':')`**: split at the *last* colon → `Some(("10.0.0.5", "6881"))`.
+- **`u16`**: 0 to 65 535, exactly the range of a port. So `"70000"` fails to parse
+  *automatically*. The type does the checking.
+- **`const MAX_PEERS: usize = 200`**: a fixed value, named so the limit is obvious.
+- **`Vec::with_capacity(count)`**: reserve space up front (safe, because `count ≤ 200`).
+- **`as_chunks::<6>()`**: split bytes into `[u8; 6]` arrays. Clippy suggested this over
+  our first version (`chunks_exact(6)` + a pattern check), because now **the type itself**
+  guarantees each chunk is exactly 6 bytes. The shape check can't be forgotten.
+
+### Security lesson — hostile trackers (threat T7)
+
+| Evil tracker sends | Naive code | Ours |
+|---|---|---|
+| 5 bytes (not a multiple of 6) | reads a half peer / past the end | `BadCompactLength` |
+| 10 million peers | allocates huge memory, dials millions of IPs → your PC becomes a **DDoS cannon** against a victim | `TooManyPeers` (cap 200) |
+| port 0 | tries to connect to an invalid port | `PortZero` |
+| `999.0.0.1` | undefined behaviour in some parsers | `BadIp` |
+
+That middle row is a real attack: a tracker can list a **victim's** IP thousands of times
+so every downloader floods it. Caps on how many peers we accept (and later, rate limits
+on how fast we dial) stop our client being used as a weapon.
+
+**Phase 0a crash course complete:** functions, `Option`, `match`, enums, slices, structs,
+`&self`/`&mut self`, ownership/borrowing, `Result` and `?`. 34 tests.

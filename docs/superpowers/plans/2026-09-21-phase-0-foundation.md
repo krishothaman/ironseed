@@ -874,14 +874,13 @@ pub fn parse_compact_peers(bytes: &[u8]) -> Result<Vec<SocketAddrV4>, PeerAddrEr
         return Err(PeerAddrError::TooManyPeers);
     }
     let mut peers = Vec::with_capacity(count);
-    for chunk in bytes.chunks_exact(6) {
-        if let [a, b, c, d, p1, p2] = chunk {
-            let port = u16::from_be_bytes([*p1, *p2]);
-            if port == 0 {
-                return Err(PeerAddrError::PortZero);
-            }
-            peers.push(SocketAddrV4::new(Ipv4Addr::new(*a, *b, *c, *d), port));
+    // Clippy 1.98 (chunks_exact_to_as_chunks) prefers as_chunks: typed [u8; 6] arrays.
+    for &[a, b, c, d, p1, p2] in bytes.as_chunks::<6>().0 {
+        let port = u16::from_be_bytes([p1, p2]);
+        if port == 0 {
+            return Err(PeerAddrError::PortZero);
         }
+        peers.push(SocketAddrV4::new(Ipv4Addr::new(a, b, c, d), port));
     }
     Ok(peers)
 }
