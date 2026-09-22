@@ -137,3 +137,51 @@ The old Python code did `index * piece_length` with no check at all.
 
 Test names starting with `t14_` link each test to threat T14 in the spec, so we can
 prove every threat has a test.
+
+---
+
+## Task 3 — ex02 peer messages (`learn/src/ex02_messages.rs`)
+
+**Torrent idea:** peers talk by sending small **messages**. Each one starts with an
+**ID byte** saying what kind of message it is (0 = choke, 1 = unchoke, 2 = interested,
+3 = not interested, 4 = have), followed by a **payload**, the extra data (possibly none).
+
+### Rust you learned
+
+- **`enum`**: a type that is *exactly one of* a fixed list of choices:
+  ```rust
+  pub enum Message { KeepAlive, Choke, Unchoke, Interested, NotInterested,
+                     Have { piece_index: u32 } }
+  ```
+  `Have` carries data with it (which piece the peer now has). The others carry nothing.
+  A `Message` can never be "something else". The compiler knows the full list.
+- **`#[derive(Debug, PartialEq, Eq)]`**: asks Rust to auto-write code so we can
+  print a message (`Debug`) and compare two with `==` (`PartialEq`, `Eq`). Tests need both.
+- **`impl Message { ... }`**: attaches functions (**methods**) to the type.
+  `&self` means "look at this message, but don't change it or take it away".
+- **`match` must be exhaustive**: in `id()` we list every variant. If we later add
+  a new message and forget it here, the code **won't compile**. The compiler reminds us.
+- **`Have { .. }`**: "a Have, and I don't care what's inside".
+- **`&[u8]`**: a **slice**, meaning a view into a run of bytes someone else owns.
+- **Slice patterns**: `match` can check a slice's *shape*:
+  - `[]` matches only an empty slice,
+  - `[a, b, c, d]` matches only exactly 4 bytes, and names them,
+  - `_` matches anything else.
+- **`u32::from_be_bytes([a,b,c,d])`**: glue 4 bytes into one number, **big-endian**
+  (most significant byte first, the "network byte order" BitTorrent uses).
+  `[0, 0, 1, 2]` → 0×2²⁴ + 0×2¹⁶ + 1×256 + 2 = **258**.
+- **`*a`**: the pattern gives us *references* to the bytes. `*` means "the value itself".
+
+### Security lesson — exact sizes or reject (threat T3)
+
+Peers are strangers. A malicious one can send an ID with the wrong amount of data:
+
+| Evil input | Naive code | Ours |
+|---|---|---|
+| `have` with 3 bytes | reads past the end → crash (or, in C, reads memory it shouldn't) | shape `[a,b,c,d]` doesn't match → `None` |
+| `have` with 5 bytes | silently ignores the extra byte; parsers disagree → confusion bugs | `None` |
+| `choke` with a payload | ignored | `None` (choke must be empty) |
+| ID 99 | undefined behaviour / crash | `_ => None` |
+
+Rule: **the protocol says the exact size. Anything else is rejected, never guessed at.**
+We never index with `payload[0]`. The pattern match *proves* the length first.
