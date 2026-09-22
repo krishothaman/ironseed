@@ -356,3 +356,60 @@ on how fast we dial) stop our client being used as a weapon.
 
 **Phase 0a crash course complete:** functions, `Option`, `match`, enums, slices, structs,
 `&self`/`&mut self`, ownership/borrowing, `Result` and `?`. 34 tests.
+
+---
+
+## Task 7 — engine log redaction (`crates/engine/src/redact.rs`)
+
+**First real engine code.** Programs write **logs**: diary lines like
+`connected to peer 203.0.113.7` that help debug problems. But logs are dangerous:
+- they sit on disk in plain text,
+- users paste them into GitHub issues and Discord to get help,
+- malware or anyone using the PC can read them.
+
+A log full of peer IPs and torrent names says **exactly what you downloaded and who
+you talked to.** That's a privacy leak (threat T8).
+
+**Our rule:** sensitive values are only ever logged through `policy.redact(value)`.
+By default it prints `[redacted]`. Only if the user deliberately turns on
+**diagnostic mode** does the real value appear.
+
+```rust
+let policy = LogPolicy::default();            // diagnostics: false
+format!("peer {}", policy.redact(&ip))        // → "peer [redacted]"
+
+let policy = LogPolicy { diagnostics: true }; // user opted in
+format!("peer {}", policy.redact(&ip))        // → "peer 203.0.113.7"
+```
+
+**Secure by default:** the safe choice is the one you get without doing anything.
+
+### Rust you learned
+
+- **`#[derive(Default)]`**: auto-writes `LogPolicy::default()`. For a `bool`,
+  default is `false`, so **privacy is on unless someone switches it off**.
+- **`Copy`**: `LogPolicy` is tiny (one bool), so it's copied instead of moved.
+  Using it doesn't "give it away" like a `String` would.
+- **Traits** = a promise that a type can do something. Like a job skill:
+  - `Display` → "can be shown to humans" (what `{}` uses)
+  - `Debug` → "can be shown to programmers" (what `{:?}` uses)
+  - `impl fmt::Display for Redacted` = "here's how a Redacted shows itself".
+  We implemented **both**, so neither `{}` nor `{:?}` can leak the value.
+- **Generics `<T>`**: `Redacted<T>` works for *any* type: an IP, a file name, a URL.
+  One piece of code, reused for all of them.
+- **Trait bounds `T: fmt::Display`**: "Redacted<T> can be Displayed *only if* T itself
+  can be". The compiler checks this.
+- **`?Sized`**: allows `T` to be something without a fixed size, like `str`, so we
+  can redact `"a.iso"` directly.
+- **Lifetimes `'a`**: `Redacted<'a, T>` holds a *borrow* (`&'a T`) of the value.
+  `'a` is a label that says "this Redacted can't outlive the thing it points at".
+  Remember ownership rule 3 from Task 5. This is how Rust writes it down.
+  Bonus: no copying the value, so redaction is basically free.
+- **`f.write_str(MASK)`**: write our fixed text instead of the real value.
+
+### Why wrap values instead of "just being careful"?
+
+"Remember not to log IPs" fails the first time someone is tired. A **wrapper type**
+makes the safe path the easy path, and later we can search the code for any log line
+that prints an IP *without* `redact`. A rule the code enforces beats a rule people
+must remember.
