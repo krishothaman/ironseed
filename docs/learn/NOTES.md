@@ -237,3 +237,70 @@ So this peer has pieces 0, 1 and 9.
 
 The spare-bit check: count *all* 1-bits, then count only the 1-bits for real pieces
 (0 up to `num_pieces`). If they differ, some spare bit was on → reject.
+
+---
+
+## Task 5 — ex04 ownership and borrowing (`learn/src/ex04_ownership.rs`)
+
+**The big Rust idea.** Every piece of data has exactly **one owner**. When the owner
+goes away, the data is freed automatically. No garbage collector, no manual `free()`.
+
+Think of a **library book**:
+
+| Rust | Book analogy | Syntax |
+|---|---|---|
+| **Own** | you bought the book; it's yours to scribble in or throw away | `String`, `Vec<u64>` |
+| **Move** | you *give* the book to a friend; you don't have it any more | `normalize(owned)` |
+| **Borrow** | you lend it; friend can read it, then gives it back | `&names`, `&[u64]` |
+| **Mutable borrow** | you lend it *and* let them write in it (only one person at a time) | `&mut x` |
+
+Rules the compiler enforces:
+1. One owner at a time.
+2. Either **many readers** (`&`) **or one writer** (`&mut`), never both at once.
+3. A borrow can't outlive the thing it borrows.
+
+These rules kill whole families of C/C++ bugs at compile time:
+*use-after-free*, *double free*, *data races*. Those bugs are how many real
+torrent clients got hacked.
+
+### We watched the compiler catch a use-after-move
+
+We temporarily added `println!("{owned}")` after `normalize(owned)`:
+```
+error[E0382]: borrow of moved value: `owned`
+75 |         let result = normalize(owned);
+   |                                ----- value moved here
+78 |         println!("{owned}");
+   |                    ^^^^^ value borrowed here after move
+```
+In C this would compile and read freed memory. Rust refuses to build it.
+
+### Rust you learned
+
+- **`&[u64]`**: borrow a list of numbers (read-only). The caller keeps ownership.
+- **`String` vs `&str`**: `String` is an *owned* text you can grow/change;
+  `&str` is a *borrowed view* of some text. `longest_name` returns `&str` that
+  points *into the caller's* `Vec<String>`. No copying.
+- **`mut name: String`**: we own it now, so we're allowed to change it in place.
+- **`try_fold`**: like a running total, but it **stops early** if a step returns `None`.
+  `acc.checked_add(len)` = add, or `None` on overflow.
+- **`max_by_key(|n| n.len())`**: pick the item with the biggest length.
+- **`.map(String::as_str)`**: turn `Option<&String>` into `Option<&str>`.
+- **`HashSet`**: a collection with no duplicates. `insert` returns `false` if the
+  item was already there. We use that to spot repeats.
+
+### Security lessons
+
+**T14 — sizes add up.** A torrent lists many files. A hostile one can list
+`[u64::MAX, 1]`: each size alone is "valid", but the **total overflows**. Code that
+trusts the total might allocate the wrong amount or write to the wrong offset.
+`try_fold` + `checked_add` catches it.
+
+**T2 — Windows ignores case.** On Windows, `README.TXT` and `Readme.txt` are the **same
+file**. A torrent listing both makes the second download **overwrite** the first. An
+attacker could use that to replace a harmless file with a malicious one *after* you've
+checked it. We lowercase every name into a `HashSet`; a repeat = collision = reject.
+
+(Note: real Windows case rules are a bit different from Rust's `to_lowercase` for some
+non-English letters. The real engine will handle that properly in Phase 4; this is
+the idea.)
