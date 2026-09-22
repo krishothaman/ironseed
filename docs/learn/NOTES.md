@@ -185,3 +185,55 @@ Peers are strangers. A malicious one can send an ID with the wrong amount of dat
 
 Rule: **the protocol says the exact size. Anything else is rejected, never guessed at.**
 We never index with `payload[0]`. The pattern match *proves* the length first.
+
+---
+
+## Task 4 — ex03 bitfield (`learn/src/ex03_bitfield.rs`)
+
+**Torrent idea:** when you connect, a peer tells you which pieces it has as a
+**bitfield**: one bit per piece, 1 = "have it", 0 = "don't". 8 pieces fit in one byte.
+The *highest* bit of byte 0 is piece 0:
+
+```
+byte 0:  1 1 0 0 0 0 0 0    byte 1:  0 1 0 0 0 0 0 0
+piece:   0 1 2 3 4 5 6 7             8 9 · · · · · ·   ← 6 spare bits (10 pieces)
+```
+So this peer has pieces 0, 1 and 9.
+
+### Rust you learned
+
+- **`struct`**: a bundle of named fields (like a form with boxes):
+  `struct Bitfield { bytes: Vec<u8>, num_pieces: usize }`.
+  The fields have no `pub`, so **outside code can't touch them directly.**
+  It must go through our methods, which do the safety checks. This is **encapsulation**.
+- **`Vec<u8>`**: a growable list of bytes that *owns* its data.
+  `vec![0; n]` means "n zeros".
+- **`usize`**: an unsigned number sized for counting and indexing in memory.
+- **`Self`** inside `impl Bitfield` just means `Bitfield`.
+- **`&self` vs `&mut self`**:
+  - `has(&self)` → *read-only* borrow: "let me look".
+  - `set(&mut self)` → *mutable* borrow: "let me change it".
+  - Rust enforces that you need `let mut bf` to call `set`. Nothing changes by surprise.
+- **`.get(i)` / `.get_mut(i)`** return `Option`: `Some(item)` if `i` is in range,
+  `None` if not. **No crash possible.** (`bytes[i]` would crash on a bad `i`, and our
+  lint bans it.)
+- **Bit tricks**:
+  - `byte >> bit` slides the bits right; `& 1` keeps only the lowest one → "is this bit on?"
+  - `*byte |= 1 << bit` → switch that one bit on, leaving the others alone.
+  - `count_ones()` → how many 1-bits in a byte.
+- **Iterators + closures**: `bytes.iter().map(|b| b.count_ones() as usize).sum()`
+  reads as "for each byte, count its ones, add them all up". `|b| ...` is a
+  **closure**, a tiny unnamed function.
+- **Ownership**: `from_bytes(bytes: Vec<u8>, ...)` *takes* the Vec. The caller hands
+  it over, and no copy is made. (More on this in Task 5.)
+
+### Security lesson — never trust an index or a length (threat T3)
+
+| Evil input | Naive code | Ours |
+|---|---|---|
+| "do you have piece 18 quintillion?" (`usize::MAX`) | `bytes[huge]` → **crash** | range check + `.get()` → `false` |
+| bitfield with too few / too many bytes | reads past the end, or garbage state | wrong length → `None` |
+| spare bits set to 1 | peer "has" pieces that don't exist → later code may try to fetch piece #12 of a 10-piece torrent | rejected (BEP-3 says spare bits must be 0) |
+
+The spare-bit check: count *all* 1-bits, then count only the 1-bits for real pieces
+(0 up to `num_pieces`). If they differ, some spare bit was on → reject.

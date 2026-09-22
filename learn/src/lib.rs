@@ -2,3 +2,4 @@
 
 pub mod ex01_piece_math;
 pub mod ex02_messages;
+pub mod ex03_bitfield;
