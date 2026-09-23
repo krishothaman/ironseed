@@ -413,3 +413,59 @@ format!("peer {}", policy.redact(&ip))        // → "peer 203.0.113.7"
 makes the safe path the easy path, and later we can search the code for any log line
 that prints an IP *without* `redact`. A rule the code enforces beats a rule people
 must remember.
+
+---
+
+## Task 8 — supply chain and CI (`deny.toml`, `.github/workflows/ci.yml`)
+
+**The problem: we don't write all our code.** A Rust project pulls in libraries
+(**crates**) written by strangers, and those pull in *more* libraries. A medium project
+can end up with 300+ of them. **Every single one runs with your full permissions.**
+
+That's the **supply chain** (threat T16). Real attacks that happened elsewhere:
+- a popular package was taken over and a new version stole crypto wallets,
+- a maintainer deleted a tiny package and broke thousands of builds,
+- typo-squatting: `reqwests` instead of `reqwest`, and you never notice the `s`.
+
+### `deny.toml` — the doorman for libraries
+
+`cargo deny check` inspects every dependency and refuses:
+
+| Section | Checks | Why |
+|---|---|---|
+| `[advisories]` | known security holes; `yanked = "deny"` blocks versions the author pulled | a library with a public exploit shouldn't ship in our app |
+| `[licenses]` | only MIT / Apache-2.0 / BSD-3 / ISC / Zlib / Unicode-3.0 | some licences force us to publish our source or add legal duties |
+| `[bans]` | `wildcards = "deny"` | a wildcard version (`"*"`) means "any future version, sight unseen" — that's how a hijacked package gets in |
+| `[sources]` | only crates.io | no random git repos, which can be rewritten silently |
+
+Current result: `advisories ok, bans ok, licenses ok, sources ok` (we have no
+dependencies yet — this is the doorman **hired before** the guests arrive).
+
+### `.github/workflows/ci.yml` — the robot reviewer
+
+**CI** = Continuous Integration: GitHub runs checks automatically on every push.
+Three jobs, in parallel:
+
+1. **rust** (on Windows, our target OS): `cargo fmt --check` → `cargo clippy -D warnings`
+   → `cargo test`. Same three commands we run by hand.
+2. **deny**: cargo-deny, as above.
+3. **secrets**: **gitleaks** scans the *whole history* for passwords and API keys.
+   Committing a secret and deleting it later doesn't help — git keeps every version.
+   The only real fix is never committing it, so we check every push.
+
+```yaml
+permissions:
+  contents: read
+```
+**Least privilege.** By default a CI job gets a token that can *write* to your repo. If
+a dependency of a build step were malicious, it could push commits. We cut it down to
+read-only: CI can look at the code and nothing else.
+
+### Why CI matters even when you work alone
+
+A check you must remember to run is a check you'll skip when tired or in a hurry.
+CI runs the same checks the same way, every time, and a red ✗ appears on GitHub for
+anyone to see. **Discipline you don't have to supply is the only kind that lasts.**
+
+(Stretch goal from the spec: pin each `uses:` to an exact commit ID rather than a tag
+like `@v4`, since a tag can be moved to point at different code.)
