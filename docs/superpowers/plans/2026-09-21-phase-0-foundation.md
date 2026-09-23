@@ -1,5 +1,7 @@
 # Phase 0 — Rust Crash Course + Project Foundation Implementation Plan
 
+**Status: COMPLETE (2026-09-23).** All 9 tasks done; phase gate passed (build clean, 37 tests green, cargo-deny clean). See `docs/THREAT_MODEL.md` and `docs/learn/NOTES.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Install the Rust toolchain and create a locked-down Cargo workspace (lints, supply-chain checks, CI, log redaction). Teach Rust basics through five small, torrent-flavoured exercises.
@@ -50,19 +52,19 @@
 
 **Files:** none
 
-- [ ] **Step 1:** Install the MSVC C++ build tools. Rust on Windows uses Microsoft's linker.
+- [x] **Step 1:** Install the MSVC C++ build tools. Rust on Windows uses Microsoft's linker.
 
 ```bash
 winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
 
-- [ ] **Step 2:** Install rustup, the official Rust installer and version manager.
+- [x] **Step 2:** Install rustup, the official Rust installer and version manager.
 
 ```bash
 winget install --id Rustlang.Rustup
 ```
 
-- [ ] **Step 3:** Close and reopen the terminal and the Claude app so `PATH` updates. Then verify:
+- [x] **Step 3:** Close and reopen the terminal and the Claude app so `PATH` updates. Then verify:
 
 ```bash
 rustc --version
@@ -74,7 +76,7 @@ cargo --version
 
 Expected: both print a version such as `rustc 1.9x.y (...)`.
 
-- [ ] **Step 4:** Add the git safe-directory exception (the D: drive doesn't record file owners):
+- [x] **Step 4:** Add the git safe-directory exception (the D: drive doesn't record file owners):
 
 ```bash
 git config --global --add safe.directory D:/projects/bittorrent-client
@@ -92,7 +94,7 @@ git config --global --add safe.directory D:/projects/bittorrent-client
 **Interfaces:**
 - Produces: workspace members `bencode`, `engine` and `learn`, which inherit `[workspace.lints]`.
 
-- [ ] **Step 1: Move the legacy code**
+- [x] **Step 1: Move the legacy code**
 
 ```bash
 mkdir -p legacy-python && mv bencoding.py client.py main.py pieces.py protocol.py torrent.py tracker.py test_tracker.py legacy-python/
@@ -108,7 +110,7 @@ readable reference for the protocol flow. Known bugs are listed in the
 design spec, §10. Don't copy its patterns without checking that list.
 ```
 
-- [ ] **Step 2: Write `rust-toolchain.toml`.** Pin it to the exact version from `rustc --version`. For example, if that prints `1.97.0`, write `channel = "1.97.0"`:
+- [x] **Step 2: Write `rust-toolchain.toml`.** Pin it to the exact version from `rustc --version`. For example, if that prints `1.97.0`, write `channel = "1.97.0"`:
 
 ```toml
 [toolchain]
@@ -117,7 +119,7 @@ components = ["clippy", "rustfmt"]
 profile = "minimal"
 ```
 
-- [ ] **Step 3: Write the root `Cargo.toml`.** `rust-version` must be the same version as the toolchain channel:
+- [x] **Step 3: Write the root `Cargo.toml`.** `rust-version` must be the same version as the toolchain channel:
 
 ```toml
 [workspace]
@@ -142,14 +144,14 @@ panic = "deny"
 indexing_slicing = "deny"
 ```
 
-- [ ] **Step 4: Write `clippy.toml`**
+- [x] **Step 4: Write `clippy.toml`**
 
 ```toml
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 ```
 
-- [ ] **Step 5: Write the three member crates**
+- [x] **Step 5: Write the three member crates**
 
 `crates/bencode/Cargo.toml` (the other two are identical except for `name`, which is `engine` and `learn`):
 
@@ -184,7 +186,7 @@ workspace = true
 //! Phase 0a Rust crash course. Never shipped.
 ```
 
-- [ ] **Step 6: Update `.gitignore` and write `.gitattributes`**
+- [x] **Step 6: Update `.gitignore` and write `.gitattributes`**
 
 `.gitignore`:
 
@@ -204,14 +206,14 @@ node_modules/
 *.ico binary
 ```
 
-- [ ] **Step 7: Build and prove the unsafe ban works**
+- [x] **Step 7: Build and prove the unsafe ban works**
 
 Run: `cargo build --workspace`. Expected: `Finished`.
 
 Temporarily add `pub fn bad() { unsafe {} }` to `crates/engine/src/lib.rs`, then run `cargo build -p engine`.
 Expected: `error: usage of an unsafe block` … `#[forbid(unsafe_code)]`. **Remove the line** and rebuild; it should say `Finished`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add -A && git commit -m "chore: cargo workspace with security lints; move legacy python"
@@ -228,7 +230,7 @@ git add -A && git commit -m "chore: cargo workspace with security lints; move le
 **Interfaces:**
 - Produces: `piece_count(u64, u64) -> Option<u64>`, `last_piece_len(u64, u64) -> Option<u64>`, `piece_offset(u64, u64) -> Option<u64>`
 
-- [ ] **Step 1: Write the stubs and the failing tests**
+- [x] **Step 1: Write the stubs and the failing tests**
 
 ```rust
 //! ex01: how many pieces, how long is the last one, where does piece N start?
@@ -297,11 +299,11 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests to watch them fail**
+- [x] **Step 2: Run the tests to watch them fail**
 
 Run: `cargo test -p learn ex01`. Expected: 8 FAILED with `not yet implemented`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
 pub fn piece_count(total_len: u64, piece_len: u64) -> Option<u64> {
@@ -326,11 +328,11 @@ pub fn piece_offset(index: u64, piece_len: u64) -> Option<u64> {
 }
 ```
 
-- [ ] **Step 4: Run the tests to watch them pass**
+- [x] **Step 4: Run the tests to watch them pass**
 
 Run: `cargo test -p learn ex01`. Expected: `8 passed`.
 
-- [ ] **Step 5: Commit** — `git add learn && git commit -m "learn: ex01 piece math"`
+- [x] **Step 5: Commit** — `git add learn && git commit -m "learn: ex01 piece math"`
 
 ---
 
@@ -343,7 +345,7 @@ Run: `cargo test -p learn ex01`. Expected: `8 passed`.
 **Interfaces:**
 - Produces: `enum Message`, `Message::id(&self) -> Option<u8>`, `from_wire(u8, &[u8]) -> Option<Message>`
 
-- [ ] **Step 1: Write the enum, the stubs and the failing tests**
+- [x] **Step 1: Write the enum, the stubs and the failing tests**
 
 ```rust
 //! ex02: a few BEP-3 peer messages as a Rust enum.
@@ -415,9 +417,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to see it fail** — `cargo test -p learn ex02`. Expected: FAILED (`not yet implemented`).
+- [x] **Step 2: Run to see it fail** — `cargo test -p learn ex02`. Expected: FAILED (`not yet implemented`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
 impl Message {
@@ -447,9 +449,9 @@ pub fn from_wire(id: u8, payload: &[u8]) -> Option<Message> {
 }
 ```
 
-- [ ] **Step 4: Run to see it pass** — `cargo test -p learn ex02`. Expected: `6 passed`.
+- [x] **Step 4: Run to see it pass** — `cargo test -p learn ex02`. Expected: `6 passed`.
 
-- [ ] **Step 5: Commit** — `git add learn && git commit -m "learn: ex02 peer messages"`
+- [x] **Step 5: Commit** — `git add learn && git commit -m "learn: ex02 peer messages"`
 
 ---
 
@@ -462,7 +464,7 @@ pub fn from_wire(id: u8, payload: &[u8]) -> Option<Message> {
 **Interfaces:**
 - Produces: `struct Bitfield` with `new(usize)`, `len`, `is_empty`, `has(usize) -> bool`, `set(usize) -> bool`, `count() -> usize`, `from_bytes(Vec<u8>, usize) -> Option<Bitfield>`
 
-- [ ] **Step 1: Write the struct, the stubs and the failing tests**
+- [x] **Step 1: Write the struct, the stubs and the failing tests**
 
 ```rust
 //! ex03: which pieces does a peer have? One bit per piece (BEP-3).
@@ -569,9 +571,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to see it fail** — `cargo test -p learn ex03`. Expected: FAILED.
+- [x] **Step 2: Run to see it fail** — `cargo test -p learn ex03`. Expected: FAILED.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
     pub fn new(num_pieces: usize) -> Self {
@@ -623,9 +625,9 @@ mod tests {
     }
 ```
 
-- [ ] **Step 4: Run to see it pass** — `cargo test -p learn ex03`. Expected: `7 passed`.
+- [x] **Step 4: Run to see it pass** — `cargo test -p learn ex03`. Expected: `7 passed`.
 
-- [ ] **Step 5: Commit** — `git add learn && git commit -m "learn: ex03 bitfield"`
+- [x] **Step 5: Commit** — `git add learn && git commit -m "learn: ex03 bitfield"`
 
 ---
 
@@ -638,7 +640,7 @@ mod tests {
 **Interfaces:**
 - Produces: `total_len(&[u64]) -> Option<u64>`, `longest_name(&[String]) -> Option<&str>`, `has_case_collision(&[&str]) -> bool`, `normalize(String) -> String`
 
-- [ ] **Step 1: Write the stubs and the failing tests**
+- [x] **Step 1: Write the stubs and the failing tests**
 
 ```rust
 //! ex04: ownership (who owns data) and borrowing (temporarily looking at it).
@@ -705,9 +707,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to see it fail** — `cargo test -p learn ex04`. Expected: FAILED.
+- [x] **Step 2: Run to see it fail** — `cargo test -p learn ex04`. Expected: FAILED.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
 pub fn total_len(file_lengths: &[u64]) -> Option<u64> {
@@ -736,9 +738,9 @@ pub fn normalize(mut name: String) -> String {
 }
 ```
 
-- [ ] **Step 4: Run to see it pass** — `cargo test -p learn ex04`. Expected: `5 passed`.
+- [x] **Step 4: Run to see it pass** — `cargo test -p learn ex04`. Expected: `5 passed`.
 
-- [ ] **Step 5: Commit** — `git add learn && git commit -m "learn: ex04 ownership and borrowing"`
+- [x] **Step 5: Commit** — `git add learn && git commit -m "learn: ex04 ownership and borrowing"`
 
 ---
 
@@ -751,7 +753,7 @@ pub fn normalize(mut name: String) -> String {
 **Interfaces:**
 - Produces: `enum PeerAddrError`, `parse_port(&str) -> Result<u16, PeerAddrError>`, `parse_peer(&str) -> Result<SocketAddrV4, PeerAddrError>`, `const MAX_PEERS: usize = 200`, `parse_compact_peers(&[u8]) -> Result<Vec<SocketAddrV4>, PeerAddrError>`
 
-- [ ] **Step 1: Write the error type, the stubs and the failing tests**
+- [x] **Step 1: Write the error type, the stubs and the failing tests**
 
 ```rust
 //! ex05: errors as values. `Result<T, E>` is either Ok(T) or Err(E).
@@ -845,9 +847,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to see it fail** — `cargo test -p learn ex05`. Expected: FAILED.
+- [x] **Step 2: Run to see it fail** — `cargo test -p learn ex05`. Expected: FAILED.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
 pub fn parse_port(s: &str) -> Result<u16, PeerAddrError> {
@@ -886,11 +888,11 @@ pub fn parse_compact_peers(bytes: &[u8]) -> Result<Vec<SocketAddrV4>, PeerAddrEr
 }
 ```
 
-- [ ] **Step 4: Run to see it pass** — `cargo test -p learn ex05`. Expected: `8 passed`.
+- [x] **Step 4: Run to see it pass** — `cargo test -p learn ex05`. Expected: `8 passed`.
 
-- [ ] **Step 5: Lint the whole crash course** — `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check`. Expected: no output, exit code 0. If rustfmt complains, run `cargo fmt --all` and re-check.
+- [x] **Step 5: Lint the whole crash course** — `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check`. Expected: no output, exit code 0. If rustfmt complains, run `cargo fmt --all` and re-check.
 
-- [ ] **Step 6: Commit** — `git add learn && git commit -m "learn: ex05 results and errors"`
+- [x] **Step 6: Commit** — `git add learn && git commit -m "learn: ex05 results and errors"`
 
 ---
 
@@ -903,7 +905,7 @@ pub fn parse_compact_peers(bytes: &[u8]) -> Result<Vec<SocketAddrV4>, PeerAddrEr
 **Interfaces:**
 - Produces: `struct LogPolicy { pub diagnostics: bool }` (`Default` = diagnostics off), `LogPolicy::redact<'a, T: ?Sized>(&self, &'a T) -> Redacted<'a, T>`, and `Redacted` implementing `Display` + `Debug`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 //! Log redaction (spec T8). Sensitive values (peer IPs, torrent names, tracker
@@ -959,9 +961,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to see it fail** — `cargo test -p engine`. Expected: FAILED (`not yet implemented`).
+- [x] **Step 2: Run to see it fail** — `cargo test -p engine`. Expected: FAILED (`not yet implemented`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
 impl LogPolicy {
@@ -994,9 +996,9 @@ impl<T: fmt::Debug + ?Sized> fmt::Debug for Redacted<'_, T> {
 }
 ```
 
-- [ ] **Step 4: Run to see it pass** — `cargo test -p engine`. Expected: `3 passed`.
+- [x] **Step 4: Run to see it pass** — `cargo test -p engine`. Expected: `3 passed`.
 
-- [ ] **Step 5: Commit** — `git add crates/engine && git commit -m "feat(engine): log redaction policy (T8)"`
+- [x] **Step 5: Commit** — `git add crates/engine && git commit -m "feat(engine): log redaction policy (T8)"`
 
 ---
 
@@ -1005,7 +1007,7 @@ impl<T: fmt::Debug + ?Sized> fmt::Debug for Redacted<'_, T> {
 **Files:**
 - Create: `deny.toml`, `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Write `deny.toml`**
+- [x] **Step 1: Write `deny.toml`**
 
 ```toml
 # cargo-deny policy (spec T16). Checks every dependency for known
@@ -1033,7 +1035,7 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 ```
 
-- [ ] **Step 2: Install cargo-deny and run it** (this builds it from crates.io, so **ask the user before installing**)
+- [x] **Step 2: Install cargo-deny and run it** (this builds it from crates.io, so **ask the user before installing**)
 
 ```bash
 cargo install --locked cargo-deny
@@ -1041,7 +1043,7 @@ cargo install --locked cargo-deny
 
 Run: `cargo deny check`. Expected: `advisories ok, bans ok, licenses ok, sources ok`.
 
-- [ ] **Step 3: Write `.github/workflows/ci.yml`**
+- [x] **Step 3: Write `.github/workflows/ci.yml`**
 
 ```yaml
 name: ci
@@ -1079,11 +1081,11 @@ jobs:
 
 (Stretch goal, T16: pin each `uses:` to a full commit SHA instead of a tag.)
 
-- [ ] **Step 4: Run the CI Rust steps locally**
+- [x] **Step 4: Run the CI Rust steps locally**
 
 Run: `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`. Expected: every test passes (37 total: 34 in `learn`, 3 in `engine`) and there are no warnings.
 
-- [ ] **Step 5: Commit** — `git add deny.toml .github && git commit -m "ci: fmt, clippy, tests, cargo-deny, gitleaks (T16)"`
+- [x] **Step 5: Commit** — `git add deny.toml .github && git commit -m "ci: fmt, clippy, tests, cargo-deny, gitleaks (T16)"`
 
 ---
 
@@ -1092,7 +1094,7 @@ Run: `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D wa
 **Files:**
 - Create: `docs/THREAT_MODEL.md`, `docs/learn/NOTES.md`
 
-- [ ] **Step 1: Write `docs/THREAT_MODEL.md`**
+- [x] **Step 1: Write `docs/THREAT_MODEL.md`**
 
 ```markdown
 # Threat Model — Status Tracker
@@ -1120,13 +1122,13 @@ Status is one of: `planned` → `implemented` → `tested` → `reviewed`.
 | T16 | Supply chain | 0b | implemented | `deny.toml`, `ci.yml`, workspace lints |
 ```
 
-- [ ] **Step 2: Write `docs/learn/NOTES.md`.** Collect the plain-language explanation given after each task, under one heading per task.
+- [x] **Step 2: Write `docs/learn/NOTES.md`.** Collect the plain-language explanation given after each task, under one heading per task.
 
-- [ ] **Step 3: Phase gate (spec §7)**
+- [x] **Step 3: Phase gate (spec §7)**
 
 - Compiles: `cargo build --workspace`.
 - Tests pass: `cargo test --workspace`.
 - Threat review: T8 is partial and T16 is implemented; nothing new is open.
 - Explanation given to the user.
 
-- [ ] **Step 4: Commit** — `git add docs && git commit -m "docs: threat-model tracker and phase 0 learning notes"`
+- [x] **Step 4: Commit** — `git add docs && git commit -m "docs: threat-model tracker and phase 0 learning notes"`

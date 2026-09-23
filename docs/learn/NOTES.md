@@ -469,3 +469,66 @@ anyone to see. **Discipline you don't have to supply is the only kind that lasts
 
 (Stretch goal from the spec: pin each `uses:` to an exact commit ID rather than a tag
 like `@v4`, since a tag can be moved to point at different code.)
+
+---
+
+## Task 9 — threat tracker and the phase gate (`docs/THREAT_MODEL.md`)
+
+**Idea:** a security plan nobody checks is just a wish. So we keep a one-page table:
+16 threats, and for each one, *what actually exists today*.
+
+| Status | Meaning |
+|---|---|
+| `planned` | Written in the spec, no code |
+| `partial` | Part of the defence exists |
+| `implemented` | Code exists |
+| `tested` | Code exists **and** a test proves it |
+| `reviewed` | Tested, plus a deliberate re-read against the spec |
+
+Today: **T16 implemented** (supply chain), **T8 partial** (log redaction), the other 14
+`planned`. Being honest about "planned" is the point — a tracker that says everything is
+fine is worse than no tracker.
+
+### The trick that makes it verifiable
+
+Tests are **named after the threat** they defend: `t3_rejects_have_with_wrong_length`,
+`t7_rejects_too_many_peers`, `t14_offset_overflow_is_caught`. So the claim in the table
+can be checked by a command rather than trusted:
+
+```
+cargo test t7_        → runs every T7 test
+```
+Right now 16 of our 37 tests are named after a threat.
+
+### Phase gate (spec §7)
+
+A **gate** means: don't start the next phase until these are all true.
+
+| Check | Result |
+|---|---|
+| `cargo build --workspace` | clean |
+| `cargo test --workspace` | 37 passed, 0 failed |
+| `cargo clippy -D warnings` | clean |
+| `cargo fmt --check` | clean |
+| `cargo deny check` | advisories ok, bans ok, licenses ok, sources ok |
+| Threats reviewed | T8 partial, T16 implemented, nothing newly open |
+| Explained to you | yes, one section per task in this file |
+
+Gates stop the classic failure: rushing forward on a shaky base and paying for it
+five times over later.
+
+---
+
+# ✅ Phase 0 complete
+
+**What exists now:** a locked-down Rust workspace (no `unsafe`, no `unwrap`, no raw
+indexing), a pinned toolchain, supply-chain checks, CI on every push, privacy-safe
+logging, a threat tracker, and 37 tests.
+
+**What you learned:** functions, `Option`, `match`, enums, slice patterns, structs,
+`&self` vs `&mut self`, **ownership and borrowing**, `Result` and `?`, traits,
+generics and lifetimes — every one of them through a real torrent problem.
+
+**Next, Phase 1:** the bencode parser — the code that reads a `.torrent` file. It is
+the single most attacker-exposed part of the app, because the file comes from a
+stranger before we have checked anything at all. That is threat T1.
