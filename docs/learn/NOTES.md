@@ -532,3 +532,131 @@ generics and lifetimes — every one of them through a real torrent problem.
 **Next, Phase 1:** the bencode parser — the code that reads a `.torrent` file. It is
 the single most attacker-exposed part of the app, because the file comes from a
 stranger before we have checked anything at all. That is threat T1.
+
+---
+
+# Phase 1 — Task 1: errors and limits
+
+The bencode parser starts here, with the two things it needs before it can read a
+single byte: a way to **say no**, and a list of **what it will refuse**.
+
+## What bencode is
+
+A `.torrent` file is written in a tiny format called bencode. Four shapes, no
+spaces, no newlines:
+
+| Shape | Looks like | Means |
+|---|---|---|
+| Integer | `i42e` | 42 |
+| Byte string | `4:spam` | "4 bytes follow" then `spam` |
+| List | `li1e4:spame` | `[1, "spam"]` |
+| Dictionary | `d3:cow3:mooe` | `{"cow": "moo"}` |
+
+That is the entire format. And yet it is where torrent clients have historically
+been broken, because every one of those numbers is written *by the person who made
+the file* — and that person may be hostile.
+
+## An error **enum**, not an error string
+
+A beginner's instinct is `Err("bad integer")`. Rust lets us do better:
+
+```rust
+pub enum ErrorKind {
+    IntLeadingZero,
+    IntOverflow,
+    DuplicateKey,
+    // ...18 of them
+}
+```
+
+An **enum** is a fixed menu of possibilities. This buys three things:
+
+1. **The compiler checks it.** Write `match` over an `ErrorKind` and forget a
+   variant, and the build fails. A typo'd string is silently wrong forever.
+2. **Callers can react.** Phase 2 can say "an oversized file is worth telling the
+   user about; a malformed one is not" — impossible if all it has is text.
+3. **It is a checklist.** Those 18 variants are the 18 rules the parser enforces.
+   You can read the list and see the whole security policy.
+
+The error also carries **where**:
+
+```rust
+pub struct Error { pub kind: ErrorKind, pub at: usize }
+```
+
+`at` is a byte offset. "Bad integer at byte 4412" is debuggable; "bad integer" is not.
+
+## The quiet security decision
+
+```rust
+pub fn message(self) -> &'static str { ... }
+```
+
+`&'static str` means **a fixed piece of text baked into the program**. Not built at
+runtime, not formatted, not assembled from anything.
+
+Why that matters: the obvious way to write an error is
+`format!("bad integer: {}", the_bytes_we_read)`. That feels helpful. It is also a
+privacy leak (threat **T8**) — the log now contains a slice of a file the user may
+not want recorded, and, worse, whatever bytes an attacker chose. Logs get pasted
+into bug reports. Terminals interpret control characters.
+
+So the rule is structural rather than disciplinary: an error is **a number and a
+sentence chosen from a fixed list**. There is no place for attacker bytes to go,
+even if someone later writes careless code. The test `t8_error_text_is_only_offset_and_reason`
+checks all 18 messages.
+
+## The limits, all in one place
+
+```rust
+pub struct Limits {
+    pub max_input: usize,       // 10 MiB
+    pub max_depth: u32,         // 64
+    pub max_items: usize,       // 100_000 per list or dict
+    pub max_total_items: usize, // 1_000_000 in the whole file
+    pub max_int_digits: usize,  // 20
+    pub max_string: usize,      // 10 MiB
+}
+```
+
+Every refusal-for-being-too-big lives in this one struct. Not scattered as magic
+numbers through the parser. That means the entire size policy can be read in
+fifteen seconds, reviewed, and argued with — and a test can assert the numbers
+match the spec.
+
+`max_total_items` is not in the spec; it is ours. Reason: 10 MiB of `le` (empty
+lists) is about 5 million values, and each one costs roughly 48 bytes of memory.
+A 10 MiB file would turn into ~240 MB of RAM. That multiplication is the attack,
+so it gets its own cap.
+
+## `..Limits::TORRENT`
+
+```rust
+let tight = Limits { max_depth: 4, ..Limits::TORRENT };
+```
+
+"Take `TORRENT`, change `max_depth`, keep the rest." Called **struct update
+syntax**. Tests use it constantly: set one limit tiny, prove the parser refuses,
+leave everything else realistic.
+
+## `#[cfg_attr(not(test), expect(dead_code, ...))]`
+
+A wrinkle worth understanding. `Error::new` is only called by the tests right now
+— the parser that will really use it arrives in Task 3. Rust's `dead_code` warning
+fires, and our `-D warnings` policy turns every warning into a build failure.
+
+- `allow(dead_code)` would silence it — and keep silencing it forever, including
+  after it stops being true.
+- `expect(dead_code)` silences it **and warns when the lint stops firing**. So the
+  compiler will tell us to delete the attribute the moment the parser lands.
+- `cfg_attr(not(test), ...)` applies it only to the non-test build, because in the
+  test build the function *is* used and the expectation would be unfulfilled.
+
+That is the shape of a good suppression: temporary, self-expiring, and explained.
+
+## Result
+
+6 tests, clippy clean, formatting clean.
+
+**Next, Task 2:** the `Value` type — how a parsed torrent is held in memory, and
+why it *borrows* the file's bytes instead of copying them.

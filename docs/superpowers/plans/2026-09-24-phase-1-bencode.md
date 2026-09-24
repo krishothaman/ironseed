@@ -170,6 +170,14 @@ pub struct Error {
 }
 
 impl Error {
+    // The parser (Task 3) is the real caller; until then only the tests use
+    // this, so it is dead code in a non-test build and live code in a test
+    // build. `expect` rather than `allow` so the compiler tells us to delete
+    // this attribute the moment the parser lands.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the parser from Task 3 onwards")
+    )]
     pub(crate) fn new(kind: ErrorKind, at: usize) -> Self {
         Error { kind, at }
     }
@@ -357,6 +365,10 @@ cargo clippy -p bencode --all-targets -- -D warnings && cargo fmt --all --check
 ```
 
 Expected: both exit 0. If `fmt --check` fails, run `cargo fmt --all` and re-run.
+
+Note: `Error::new` has no non-test caller until Task 3, so `-D warnings` fails
+on `dead_code` without the `cfg_attr` above. Delete that attribute in Task 3;
+`unfulfilled_lint_expectations` will remind you if you forget.
 
 - [ ] **Step 4: Explain and write notes**
 
