@@ -752,3 +752,119 @@ tests until the parser arrives, so they carry the same self-expiring
 
 **Next, Task 3:** the parser itself — reading integers and byte strings, where most
 of the dangerous tricks live.
+
+---
+
+# Phase 1 — Task 3: reading integers and byte strings
+
+This is the first real parser code. It reads the two "simple" shapes, `i42e` and
+`4:spam` — and it turns out most of the dangerous tricks live right here.
+
+## What a cursor parser is
+
+Think of reading a sentence with your finger under the current letter. The parser
+keeps exactly that: the bytes, and a position `pos`. Three tiny helpers do all the
+moving:
+
+```rust
+fn peek(&self) -> Option<u8>   // what's under my finger? (None = end of file)
+fn bump(&mut self)             // move my finger one byte right
+fn err(&self, kind) -> Error   // "problem here", stamped with the current position
+```
+
+`peek` uses `.get(pos)`, never `input[pos]`. Off the end of the file, it returns
+`None`. It cannot crash.
+
+## The rules the integer reader enforces
+
+| Input | Verdict | Why |
+|---|---|---|
+| `i42e` | ✅ 42 | |
+| `ie` | ❌ `IntEmpty` | no digits at all |
+| `i03e` | ❌ `IntLeadingZero` | `3` must be written one way only |
+| `i-0e` | ❌ `IntNegativeZero` | there is no "minus zero" |
+| `i123456789012345678901e` | ❌ `IntTooManyDigits` | over the 20-digit cap |
+| `i9223372036854775808e` | ❌ `IntOverflow` | one more than the biggest `i64` |
+| `i4x2e` | ❌ `UnexpectedByte` | `x` is not a digit |
+| `i42` | ❌ `UnexpectedEnd` | no closing `e` |
+
+Why be so strict about `03` and `-0`? Because a torrent's identity is a hash of its
+**exact bytes**. If `3` and `03` both meant three, two files that "say the same
+thing" could have different hashes — and that's a trick attackers use to make one
+torrent look like another.
+
+## The crash you just watched
+
+Adding up digits looks harmless: `number = number * 10 + digit`. But numbers in a
+computer have a maximum. For `i64`, it's 9,223,372,036,854,775,807. Go one past it
+and Rust **panics** (in a debug build) — the program stops. In a release build it
+silently *wraps around* to a huge negative number, which is arguably worse.
+
+We proved it: I swapped the safe maths for the plain version, ran the test, and got
+
+```
+attempt to subtract with overflow
+```
+
+That crash *is* the attack. A 21-byte `.torrent` would take down the whole app.
+
+The fix is `checked_mul` and `checked_sub`. They return `None` instead of crashing
+when the answer doesn't fit, and `?` turns that into a clean `IntOverflow` error.
+
+**Note the digit cap alone isn't enough:** `9223372036854775808` is only 19 digits —
+under the 20-digit limit — and still too big. Two different defences, each catching
+what the other can't.
+
+## The counting-downwards trick
+
+The smallest `i64` is **−9,223,372,036,854,775,808**. The biggest is
+**+9,223,372,036,854,775,807**. They aren't mirror images — there's one extra on the
+negative side.
+
+So the "obvious" approach — read the digits as a positive number, then flip the sign
+— fails on the smallest number, because its positive version doesn't exist. The
+parser instead counts **downwards** (`acc * 10 − digit`), building every number as
+negative, and flips positives at the end. The test
+`parses_the_extremes_of_i64` checks both edges.
+
+## The most important line in the file
+
+For `4:spam`, the file *tells us* how many bytes follow. An attacker can write
+anything there:
+
+```
+4294967296:x
+```
+
+"Four billion bytes follow" — in a 12-byte file. A careless parser reserves 4 GB of
+memory before reading them, and the machine falls over. Ours does this:
+
+```rust
+let bytes = self.input.get(self.pos..end)          // is it ACTUALLY there?
+    .ok_or_else(|| self.err(ErrorKind::LengthBeyondInput))?;
+```
+
+**The declared length must fit in what's actually left.** Checked *before* anything
+happens. And because we *borrow* the bytes (Task 2), there's no allocation at all —
+not even afterwards.
+
+## No endless searching
+
+`take_until(stop, max, ...)` scans forward for the closing `e` or `:` — but gives up
+after `max` bytes. Without that, `i` followed by nine megabytes of digits would make
+us walk the whole file looking for an `e` that isn't there.
+
+## A test that exists to read a flag
+
+The `canonical` flag (does this file have its dictionary keys in order?) is only set
+by dictionaries, which arrive in Task 4. Until then nothing reads it and the linter
+complained. Instead of silencing the linter, I added a real test:
+`scalars_never_clear_the_canonical_flag`. If you can make a warning go away by
+testing something true, that's always better than hiding it.
+
+## Result
+
+32 tests (19 new), 15 of them named `t1_`. Clippy clean.
+
+**Next, Task 4:** lists and dictionaries — recursion, how deep is too deep, and what
+to do when the same key appears twice.

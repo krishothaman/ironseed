@@ -1016,6 +1016,16 @@ mod tests {
         );
     }
 
+    /// Only dictionaries can be out of order, so integers and strings must
+    /// never clear the flag.
+    #[test]
+    fn scalars_never_clear_the_canonical_flag() {
+        let limits = Limits::TORRENT;
+        let mut p = Parser::new(b"4:spam", &limits);
+        assert!(p.parse_value(0).is_ok());
+        assert!(p.canonical());
+    }
+
     #[test]
     fn t1_rejects_empty_integer() {
         assert_eq!(kind_of(b"ie"), Some(ErrorKind::IntEmpty));
@@ -1133,7 +1143,7 @@ mod tests {
 cargo test -p bencode parser::
 ```
 
-Expected: all 16 `parser::tests::*` tests FAIL at a `todo!()`.
+Expected: all 19 `parser::tests::*` tests FAIL at a `todo!()`.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -1296,6 +1306,23 @@ Add `mod parser;` to `crates/bencode/src/lib.rs`. Do **not** re-export it: the
 cursor is an implementation detail, and keeping it private means the public
 surface is just `parse`, `encode` and the value types.
 
+Nothing outside the crate calls the parser until Task 5, so in a non-test
+build the whole module is dead code. Declare it with a self-expiring
+expectation:
+
+```rust
+// Private: the cursor is an implementation detail. Nothing outside this crate
+// calls it until `parse()` wraps it in Task 5.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired into parse() in Task 5")
+)]
+mod parser;
+```
+
+Keep the `expect(dead_code)` attributes on `Error::new` and `Value::new` too:
+they are only reachable through the (still dead) parser.
+
 Note: the `use crate::value::Dict;` and `use std::collections::HashSet;` lines
 are unused until Task 4 and will warn. Leave them out for now and add them in
 Task 4 — `cargo clippy -D warnings` will fail otherwise.
@@ -1306,7 +1333,7 @@ Task 4 — `cargo clippy -D warnings` will fail otherwise.
 cargo test -p bencode
 ```
 
-Expected: `test result: ok. 29 passed` (13 + 16).
+Expected: `test result: ok. 32 passed` (13 + 19).
 
 - [ ] **Step 5: Check lints and formatting**
 
@@ -1528,6 +1555,11 @@ red state we want.
 
 - [ ] **Step 3: Write the implementation**
 
+In `crates/bencode/src/value.rs`, delete the `cfg_attr(not(test), expect(dead_code, ...))`
+attributes on `Dict::new`, `Dict::push` and `Dict::last_key` **only if** clippy
+reports them as unfulfilled — they stay dead in a non-test build until Task 5,
+so they will most likely have to stay until then.
+
 In `crates/bencode/src/parser.rs`, restore the two imports that Task 3 left out:
 
 ```rust
@@ -1645,7 +1677,7 @@ form instead:
 cargo test -p bencode
 ```
 
-Expected: `test result: ok. 43 passed` (29 + 14).
+Expected: `test result: ok. 46 passed` (32 + 14).
 
 If `accepts_nesting_right_up_to_the_limit` disagrees about the exact offset or
 the exact number of `l`s allowed, fix the **test** to match the rule
@@ -1876,13 +1908,19 @@ pub fn parse_with<'a>(input: &'a [u8], limits: &Limits) -> Result<Parsed<'a>> {
 `lib.rs` needs `Error`, `ErrorKind`, `Limits`, `Value` in scope; they already
 are through the existing `pub use` lines.
 
+`parse_with` makes the parser reachable, so every temporary
+`expect(dead_code, ...)` now becomes unfulfilled. Delete all of them: the one on
+`mod parser;` in `lib.rs`, `Error::new` in `error.rs`, and `Value::new`,
+`Dict::new`, `Dict::push`, `Dict::last_key` in `value.rs`. Clippy's
+`unfulfilled_lint_expectations` error lists each one.
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
 cargo test -p bencode
 ```
 
-Expected: `test result: ok. 43 passed` for the unit tests and
+Expected: `test result: ok. 46 passed` for the unit tests and
 `test result: ok. 8 passed` for `tests/parse.rs`.
 
 If `parses_a_small_torrent` fails on a length, the `TORRENT` literal has a
@@ -2089,7 +2127,7 @@ pub use encode::encode;
 cargo test -p bencode
 ```
 
-Expected: `test result: ok. 43 passed` (unit) and `test result: ok. 13 passed`
+Expected: `test result: ok. 46 passed` (unit) and `test result: ok. 13 passed`
 (`tests/parse.rs`: 8 + 5).
 
 - [ ] **Step 5: Check lints and formatting**

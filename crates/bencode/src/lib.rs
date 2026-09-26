@@ -7,6 +7,10 @@
 
 mod error;
 mod limits;
+// Private: the cursor is an implementation detail. Nothing outside this crate
+// calls it until `parse()` wraps it in Task 5.
+#[cfg_attr(not(test), expect(dead_code, reason = "wired into parse() in Task 5"))]
+mod parser;
 mod value;
 
 pub use error::{Error, ErrorKind, Result};
