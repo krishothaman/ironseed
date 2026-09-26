@@ -76,10 +76,6 @@ impl PartialEq for Value<'_> {
 impl Eq for Value<'_> {}
 
 impl<'a> Value<'a> {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the parser from Task 3 onwards")
-    )]
     pub(crate) fn new(kind: Kind<'a>, span: Span) -> Self {
         Value { kind, span }
     }
@@ -122,29 +118,17 @@ impl<'a> Value<'a> {
 }
 
 impl<'a> Dict<'a> {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the parser from Task 3 onwards")
-    )]
     pub(crate) fn new() -> Self {
         Dict {
             entries: Vec::new(),
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the parser from Task 3 onwards")
-    )]
     pub(crate) fn push(&mut self, key: &'a [u8], value: Value<'a>) {
         self.entries.push((key, value));
     }
 
     /// The key most recently pushed. The parser uses it to notice unsorted keys.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the parser from Task 3 onwards")
-    )]
     pub(crate) fn last_key(&self) -> Option<&'a [u8]> {
         self.entries.last().map(|(k, _)| *k)
     }

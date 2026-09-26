@@ -982,3 +982,103 @@ the `e` where a value was expected. Now it failed until the real code existed.
 
 **Next, Task 5:** the public `parse()` function — the front door the rest of the app
 will actually use, plus rejecting junk after the end of the file.
+
+---
+
+# Phase 1 — Task 5: the front door, `parse()`
+
+Tasks 1–4 built the engine room. This task builds the one door the rest of the app
+walks through:
+
+```rust
+let parsed = bencode::parse(&file_bytes)?;
+```
+
+That's the whole API. Everything behind it — the cursor, the depth counting, the
+duplicate checks — stays private.
+
+## Two checks that only make sense at the front door
+
+**1. Size first, before anything else.**
+
+```rust
+if input.len() > limits.max_input {          // 10 MiB
+    return Err(Error::new(ErrorKind::InputTooLarge, 0));
+}
+```
+
+A 2 GB "torrent" costs us one comparison and nothing more. No reading, no parsing.
+Refusing early is the cheapest defence there is.
+
+**2. Nothing allowed after the end.**
+
+A `.torrent` is exactly **one** value. So `i1ei2e` — one value, then another — is
+rejected with `TrailingBytes`.
+
+Why care? Imagine a file that is a harmless-looking torrent, followed by a second,
+different one. Our client reads the first. Some other tool — an antivirus scanner, a
+website preview — might read the second. Now two programs disagree about what the
+same file *is*, and that disagreement is exactly the gap attackers slip through.
+One file, one meaning.
+
+We proved the check matters: I deleted it, and the test got `None` (no error) for
+`i1ei2e`. The parser had happily accepted a smuggled second value. Put back, green.
+
+## Unit tests vs. integration tests
+
+Until now, every test lived **inside** the file it tested (a *unit test*). Unit tests
+can see private things — like the parser's cursor.
+
+This task's tests live in `crates/bencode/tests/parse.rs` — **outside** the crate.
+That's an *integration test*. It's compiled as a separate program that can only use
+what the crate makes public — exactly like the real engine will.
+
+So it tests something unit tests can't: **is the public API actually usable?** If
+an integration test needs something that isn't `pub`, the API is wrong, not the test.
+
+## The sample torrent
+
+The integration tests use a small but real-shaped torrent:
+
+```
+d
+  8:announce 31:http://tracker.example/announce
+  4:info d
+    6:length i1024e
+    4:name 8:test.iso
+    12:piece length i16384e
+    6:pieces 20:AAAAAAAAAAAAAAAAAAAA
+  e
+e
+```
+
+And test `the_info_span_is_the_raw_bytes_to_hash` checks the payoff from Task 2: we
+can grab the **exact original bytes** of the `info` section, re-parse just those, and
+get the same dictionary back. That byte range is precisely what Phase 2 will
+fingerprint to get the torrent's `info_hash`.
+
+## The self-deleting suppressions did their job
+
+Back in Tasks 1–3, some code was only used by tests, so I marked it
+`expect(dead_code)` — "I *expect* this to look unused, for now." The promise was that
+the compiler would tell us when that stopped being true.
+
+The moment `parse()` existed, the compiler said:
+
+```
+error: this lint expectation is unfulfilled   --> lib.rs:12
+error: this lint expectation is unfulfilled   --> error.rs:93
+error: this lint expectation is unfulfilled   --> value.rs:81
+... (6 in total)
+```
+
+Every single one, with its exact line. I deleted all six. Nothing was left behind,
+and nothing had to be remembered. That's why `expect` beats `allow`: `allow` would
+have stayed silently forever.
+
+## Result
+
+55 tests: 47 unit + 8 integration. 27 are named `t1_`. Clippy clean.
+
+**Next, Task 6:** the encoder — turning a `Value` back into bencode bytes, always in
+the one correct ("canonical") form.

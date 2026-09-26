@@ -84,14 +84,6 @@ pub struct Error {
 }
 
 impl Error {
-    // The parser (Task 3) is the real caller; until then only the tests use
-    // this, so it is dead code in a non-test build and live code in a test
-    // build. `expect` rather than `allow` so the compiler tells us to delete
-    // this attribute the moment the parser lands.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the parser from Task 3 onwards")
-    )]
     pub(crate) fn new(kind: ErrorKind, at: usize) -> Self {
         Error { kind, at }
     }

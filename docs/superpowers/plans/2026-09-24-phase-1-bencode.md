@@ -1554,7 +1554,7 @@ Append to the `mod tests` block in `crates/bencode/src/parser.rs`:
 cargo test -p bencode parser::
 ```
 
-Expected: the 14 new tests FAIL — the container ones with
+Expected: the 15 new tests FAIL — the container ones with
 `UnexpectedByte` (because `parse_value` does not know `l` or `d` yet), and
 `one_flagged` may not compile until `canonical()` is reachable. Both are the
 red state we want.
@@ -1683,7 +1683,7 @@ form instead:
 cargo test -p bencode
 ```
 
-Expected: `test result: ok. 46 passed` (32 + 14).
+Expected: `test result: ok. 47 passed` (32 + 15).
 
 If `accepts_nesting_right_up_to_the_limit` disagrees about the exact offset or
 the exact number of `l`s allowed, fix the **test** to match the rule
@@ -1793,7 +1793,7 @@ fn the_info_span_is_the_raw_bytes_to_hash() {
         .expect("info key is present");
 
     let raw = info.span().slice(TORRENT).expect("span is inside the input");
-    assert!(raw.starts_with(b"d6:length"), "{:?}", &raw.get(..16));
+    assert!(raw.starts_with(b"d6:length"), "{:?}", raw.get(..16));
     assert!(raw.ends_with(b"e"));
     // Re-parsing just those bytes must give the same dictionary back.
     let again = bencode::parse(raw).expect("the info span is a complete value");
@@ -1926,7 +1926,7 @@ are through the existing `pub use` lines.
 cargo test -p bencode
 ```
 
-Expected: `test result: ok. 46 passed` for the unit tests and
+Expected: `test result: ok. 47 passed` for the unit tests and
 `test result: ok. 8 passed` for `tests/parse.rs`.
 
 If `parses_a_small_torrent` fails on a length, the `TORRENT` literal has a
@@ -2133,7 +2133,7 @@ pub use encode::encode;
 cargo test -p bencode
 ```
 
-Expected: `test result: ok. 46 passed` (unit) and `test result: ok. 13 passed`
+Expected: `test result: ok. 47 passed` (unit) and `test result: ok. 13 passed`
 (`tests/parse.rs`: 8 + 5).
 
 - [ ] **Step 5: Check lints and formatting**
