@@ -868,3 +868,117 @@ testing something true, that's always better than hiding it.
 
 **Next, Task 4:** lists and dictionaries — recursion, how deep is too deep, and what
 to do when the same key appears twice.
+
+---
+
+# Phase 1 — Task 4: lists and dictionaries
+
+Integers and strings are flat. Lists and dictionaries can hold *other values* —
+including other lists and dictionaries. That nesting is where the next set of
+attacks live.
+
+## Recursion, in one picture
+
+To read `l i1e l i2e e e` (a list containing 1 and another list), the list-reader
+reads `1`, then sees another `l`… and calls **itself** to read the inner list. A
+function calling itself is called **recursion**.
+
+Each call is like stacking a plate: "I'm in the middle of a list; come back here when
+you're done." Plates go on a pile called **the stack**. The stack is small — about
+1 MB on Windows.
+
+## The crash you just watched
+
+A file of one million `l`s means one million nested lists. One million plates. The
+pile falls over:
+
+```
+has overflowed its stack
+STATUS_STACK_OVERFLOW
+```
+
+That isn't a polite error — Windows **kills the whole program**. Rust can't catch it.
+One 1 MB file, and the client is gone.
+
+## The fix: count the plates
+
+Every value is read with a `depth` number: "how many containers am I inside?" Each
+list or dict passes `depth + 1` to whatever is inside it. And the very first line of
+`parse_value` is:
+
+```rust
+if depth > self.limits.max_depth {        // 64
+    return Err(self.err(ErrorKind::DepthExceeded));
+}
+```
+
+Real torrents nest maybe 4 or 5 deep. 64 is generous — and 64 plates is nothing for
+the stack. Recursion **with a cap** is safe. Recursion **without** one is a
+crash waiting for someone to find it.
+
+## Two different item caps
+
+| Cap | What it stops |
+|---|---|
+| `max_items` (100 000) | one giant list or dictionary |
+| `max_total_items` (1 000 000) | many medium ones adding up |
+
+Both are needed. A file could stay under the per-container limit with 50 000 lists
+of 99 999 items each — which would still be billions of values. The document-wide
+counter catches that.
+
+## Duplicate keys: rejected
+
+```
+d 4:name 8:good.iso  4:name 12:malware.exe  e
+```
+
+The same key twice. Which one is "the" name? Different programs answer differently:
+some keep the first, some the last. An attacker can use that disagreement — show you
+one name in a preview, then have the downloader use the other. So there's only one
+safe answer: **refuse the file**.
+
+## Unsorted keys: tolerated, but flagged
+
+The rules say dictionary keys must be in alphabetical (byte) order. Lots of real
+torrents break that rule — by accident, from sloppy tools. Refusing them would make
+the client useless. So we **accept** them and set `canonical = false`. Anyone who
+needs "perfect" bytes (like Phase 2's fingerprinting) can check the flag.
+
+That's a real security skill: being strict where strictness costs nothing and
+protects a lot (duplicates), and forgiving where strictness would break normal use
+(ordering) — *but never silently.*
+
+## Why a `HashSet` for duplicates
+
+The simple way to spot a duplicate: compare each new key against every earlier key.
+With 100 000 keys that's about **5 billion comparisons** — the parser would hang for
+ages. That hang is itself an attack.
+
+A `HashSet` answers "have I seen this before?" in one step, however many keys there
+are. And Rust's built-in hash uses a **random secret chosen each time the program
+starts**, so an attacker can't pre-compute keys that all land in the same bucket to
+slow it down.
+
+And note the test `t1_rejects_duplicate_keys_hidden_by_unsorted_order`: with keys
+`b, a, b`, just comparing against the *previous* key would miss it. The set doesn't.
+
+## A test that was passing for the wrong reason
+
+When I added the new tests and ran them *before* writing the code, 14 failed — but
+one **passed**. That's a red flag in test-driven development: a test that passes
+before the feature exists isn't testing the feature.
+
+It was `t1_rejects_dict_key_with_no_value`, checking `d1:ae` gives `UnexpectedByte`.
+It passed because the unfinished parser rejected **every** `d` with that same error,
+at byte 0. So I made the test also check *where*: the error must point at byte 4,
+the `e` where a value was expected. Now it failed until the real code existed.
+
+**Lesson:** always watch your tests fail first. It's the only way to know they can.
+
+## Result
+
+47 tests (15 new), 24 of them `t1_`. Clippy clean.
+
+**Next, Task 5:** the public `parse()` function — the front door the rest of the app
+will actually use, plus rejecting junk after the end of the file.

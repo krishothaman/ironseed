@@ -1467,7 +1467,13 @@ Append to the `mod tests` block in `crates/bencode/src/parser.rs`:
 
     #[test]
     fn t1_rejects_dict_key_with_no_value() {
-        assert_eq!(kind_of(b"d1:ae"), Some(ErrorKind::UnexpectedByte));
+        // The error must point at byte 4 — the `e` where a value was due —
+        // not at byte 0. Checking the offset stops this test passing for the
+        // wrong reason (a parser that rejects every `d` outright).
+        assert_eq!(
+            one(b"d1:ae").map(|_| ()),
+            Err(Error::new(ErrorKind::UnexpectedByte, 4))
+        );
     }
 
     #[test]
