@@ -660,3 +660,95 @@ That is the shape of a good suppression: temporary, self-expiring, and explained
 
 **Next, Task 2:** the `Value` type — how a parsed torrent is held in memory, and
 why it *borrows* the file's bytes instead of copying them.
+
+---
+
+# Phase 1 — Task 2: the `Value` type
+
+Once the parser reads a `.torrent`, the result has to live somewhere in memory.
+This task builds that "somewhere": a small tree of `Value`s.
+
+## The four shapes, as a Rust enum
+
+```rust
+pub enum Kind<'a> {
+    Int(i64),
+    Bytes(&'a [u8]),
+    List(Vec<Value<'a>>),
+    Dict(Dict<'a>),
+}
+```
+
+One variant per bencode shape. A `List` holds more `Value`s, and so does a `Dict`,
+which is how a tree gets built: values inside values inside values.
+
+## Borrowing instead of copying — what `'a` means
+
+Look at `Bytes(&'a [u8])`. The `&` means **borrowed**: the `Value` does not own a
+copy of the bytes, it points back into the original file's buffer.
+
+Picture a library book. Copying means photocopying every page you want to keep.
+Borrowing means writing down "page 212, lines 4–9". Much cheaper, but the note is
+only useful while you still have the book.
+
+`'a` is Rust's name for "as long as the book exists". Writing `Value<'a>` makes the
+compiler enforce it: **a `Value` can never outlive the buffer it came from.** If you
+tried to throw the file's bytes away and keep using the `Value`, the program would
+refuse to compile. In C, that mistake compiles fine and is called *use-after-free* —
+one of the most exploited bug types there is.
+
+Why it matters for a torrent: the `pieces` field is often megabytes of hashes.
+Borrowing means the parser allocates **nothing** for it.
+
+## Bytes, not text
+
+Bencode strings are called strings, but they are really **bytes**. Many are not
+valid text at all — `pieces` is raw SHA-1 hashes, and file names in old torrents
+come in random encodings. Rust's `String` must be valid UTF-8, so converting would
+either fail or quietly change the data. We keep them as `&[u8]` and let each later
+phase decide how to interpret them.
+
+## `Span`: remembering where things were
+
+```rust
+pub struct Span { pub start: usize, pub end: usize }
+```
+
+Every value remembers which bytes of the file it came from. That sounds like
+bookkeeping, but it is essential. A torrent's identity — its `info_hash` — is the
+SHA-1 of the **exact original bytes** of the `info` section. If we rebuilt those
+bytes ourselves and got even one byte different, our hash would be wrong and every
+peer would reject us. So Phase 2 will take the `info` value's `Span` and hash
+exactly those bytes.
+
+`span.slice(input)` uses `.get()`, so a mismatched buffer returns `None` instead of
+crashing.
+
+## Equality written by hand
+
+Normally you'd write `#[derive(PartialEq)]` and let Rust generate "equal means every
+field is equal". Here that would be wrong: two identical integers found at different
+places in a file would count as *different*, because their spans differ. So
+`PartialEq` is written by hand to compare **meaning** only and ignore where it came
+from. Equality is a design decision, not a given.
+
+## A `Debug` that won't flood your logs
+
+`{:?}` normally prints everything. For a 2 MB `pieces` field, that's a 2 MB log line
+— and it leaks content (threat **T8**). So `Debug` prints the length and the first 16
+bytes:
+
+```
+Bytes(4096 bytes: AAAAAAAAAAAAAAAA…)
+```
+
+Test `t8_debug_truncates_long_byte_strings` guards it.
+
+## Result
+
+13 tests (6 from Task 1, 7 here), clippy clean. The constructors are only used by
+tests until the parser arrives, so they carry the same self-expiring
+`expect(dead_code)` as Task 1.
+
+**Next, Task 3:** the parser itself — reading integers and byte strings, where most
+of the dangerous tricks live.

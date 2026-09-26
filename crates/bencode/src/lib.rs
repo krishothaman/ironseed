@@ -7,6 +7,8 @@
 
 mod error;
 mod limits;
+mod value;
 
 pub use error::{Error, ErrorKind, Result};
 pub use limits::Limits;
+pub use value::{Dict, Kind, Span, Value};
